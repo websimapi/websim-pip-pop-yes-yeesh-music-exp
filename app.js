@@ -166,6 +166,9 @@ class MusicExperience {
             // Load sound effects with spatial positioning
             await this.loadSpatialSoundEffects();
             
+            // Create outdoor sound transition manager
+            this.createTransitionFilters();
+            
             // Play outdoor ambient sounds
             this.playOutdoorAmbience();
             
@@ -179,6 +182,28 @@ class MusicExperience {
             // Fall back to basic audio if spatial audio fails
             await this.setupFallbackAudio();
         }
+    }
+    
+    createTransitionFilters() {
+        // Create a dedicated transition chain for smooth outdoor/indoor transitions
+        this.transitionLowpass = this.audioContext.createBiquadFilter();
+        this.transitionLowpass.type = 'lowpass';
+        this.transitionLowpass.frequency.value = 300;
+        
+        this.transitionHighShelf = this.audioContext.createBiquadFilter();
+        this.transitionHighShelf.type = 'highshelf';
+        this.transitionHighShelf.frequency.value = 1000;
+        this.transitionHighShelf.gain.value = -15;
+        
+        // Add a dedicated reverb for the transition area (entrance/exit)
+        this.entranceReverb = this.audioContext.createConvolver();
+        if (this.reverbs.hallway) {
+            this.entranceReverb.buffer = this.reverbs.hallway.buffer;
+        }
+        
+        // Small amount of gain boost to compensate for filtering
+        this.transitionCompensation = this.audioContext.createGain();
+        this.transitionCompensation.gain.value = 1.2;
     }
     
     async setupFallbackAudio() {
@@ -272,25 +297,68 @@ class MusicExperience {
         const impulseL = impulse.getChannelData(0);
         const impulseR = impulse.getChannelData(1);
         
-        // Generate early reflections and late reverb with increased intensity
-        for (let i = 0; i < length; i++) {
-            const t = i / sampleRate;
-            // Early reflections (more distinct)
-            if (t < 0.1) {
-                if (i % Math.floor(0.01 * sampleRate) === 0) {
-                    const reflection = reflectionLevel * 2.5 * Math.exp(-t * 4) * (0.95 - Math.random() * 0.1);
-                    impulseL[i] = reflection * (Math.random() * 2 - 1);
-                    impulseR[i] = reflection * (Math.random() * 2 - 1);
+        // For outside space - more directional, less reverb
+        if (reverbTime < 0.3) {
+            // Use sparse early reflections with very quick decay
+            for (let i = 0; i < length; i++) {
+                const t = i / sampleRate;
+                if (t < 0.08) {
+                    if (i % Math.floor(0.015 * sampleRate) === 0) {
+                        const reflection = reflectionLevel * 2.0 * Math.exp(-t * 10);
+                        impulseL[i] = reflection * (Math.random() * 2 - 1);
+                        impulseR[i] = reflection * (Math.random() * 2 - 1);
+                    }
+                } else {
+                    // Very minimal late reflections
+                    const decay = Math.exp(-t * damping * 2.0);
+                    impulseL[i] = (Math.random() * 2 - 1) * decay * diffusion * reflectionLevel * 0.1;
+                    impulseR[i] = (Math.random() * 2 - 1) * decay * diffusion * reflectionLevel * 0.1;
                 }
-            } 
-            // Late reverb (more diffuse)
-            else {
-                // Exponential decay
-                const decay = Math.exp(-t * damping * 0.8); 
-                // Increasing diffusion over time
-                const diffuseness = Math.min(1, t * diffusion * 10);
-                impulseL[i] = (Math.random() * 2 - 1) * decay * diffuseness * reflectionLevel * 2.0;
-                impulseR[i] = (Math.random() * 2 - 1) * decay * diffuseness * reflectionLevel * 2.0;
+            }
+        } 
+        // For hallway space - focused reflections, medium reverb
+        else if (reverbTime < 1.0) {
+            // More distinct early reflections with medium decay
+            for (let i = 0; i < length; i++) {
+                const t = i / sampleRate;
+                if (t < 0.15) {
+                    if (i % Math.floor(0.02 * sampleRate) === 0) {
+                        const reflection = reflectionLevel * 2.2 * Math.exp(-t * 5);
+                        // Add slight stereo difference for more realistic hall reflections
+                        impulseL[i] = reflection * (Math.random() * 0.3 + 0.85);
+                        impulseR[i] = reflection * (Math.random() * 0.3 + 0.85);
+                    }
+                } else {
+                    // Medium reverb tail
+                    const decay = Math.exp(-t * damping * 1.2);
+                    const diffuseness = Math.min(1, t * diffusion * 8);
+                    impulseL[i] = (Math.random() * 2 - 1) * decay * diffuseness * reflectionLevel;
+                    impulseR[i] = (Math.random() * 2 - 1) * decay * diffuseness * reflectionLevel;
+                }
+            }
+        }
+        // For club interior - dense reflections, strong reverb
+        else {
+            // Generate early reflections and late reverb with increased intensity
+            for (let i = 0; i < length; i++) {
+                const t = i / sampleRate;
+                // Early reflections (more distinct)
+                if (t < 0.1) {
+                    if (i % Math.floor(0.01 * sampleRate) === 0) {
+                        const reflection = reflectionLevel * 2.5 * Math.exp(-t * 4) * (0.95 - Math.random() * 0.1);
+                        impulseL[i] = reflection * (Math.random() * 2 - 1);
+                        impulseR[i] = reflection * (Math.random() * 2 - 1);
+                    }
+                } 
+                // Late reverb (more diffuse)
+                else {
+                    // Exponential decay
+                    const decay = Math.exp(-t * damping * 0.8); 
+                    // Increasing diffusion over time
+                    const diffuseness = Math.min(1, t * diffusion * 10);
+                    impulseL[i] = (Math.random() * 2 - 1) * decay * diffuseness * reflectionLevel * 2.0;
+                    impulseR[i] = (Math.random() * 2 - 1) * decay * diffuseness * reflectionLevel * 2.0;
+                }
             }
         }
         
@@ -378,19 +446,19 @@ class MusicExperience {
         this.outsideSource.source.disconnect();
         this.outsideLowpass = this.audioContext.createBiquadFilter();
         this.outsideLowpass.type = 'lowpass';
-        this.outsideLowpass.frequency.value = 300;
+        this.outsideLowpass.frequency.value = 350; // Increased from 300
         
         this.outsideHighCut = this.audioContext.createBiquadFilter();
         this.outsideHighCut.type = 'lowshelf';
-        this.outsideHighCut.frequency.value = 400;
-        this.outsideHighCut.gain.value = -20;
+        this.outsideHighCut.frequency.value = 500; // Increased from 400
+        this.outsideHighCut.gain.value = -15; // Less aggressive cut (-20 to -15)
         
         // Add slight reverb for outdoor acoustics
         this.outsideReverb = this.reverbs.outside;
         
-        // Outside gain control - reduced from 1.5 to 1.0
+        // Outside gain control
         this.outsideGain = this.audioContext.createGain();
-        this.outsideGain.gain.value = 1.0; 
+        this.outsideGain.gain.value = 0.75; // Reduced from 1.0 for better balance
         
         // Connect the chain for outside audio
         this.outsideSource.source.connect(this.outsideLowpass);
@@ -455,7 +523,7 @@ class MusicExperience {
         panner.positionY.value = position.y;
         panner.positionZ.value = position.z;
         
-        // Create gain node for volume control - reduced from 3.0 to 1.8
+        // Create gain node for volume control
         const gainNode = this.audioContext.createGain();
         gainNode.gain.value = 1.8; 
         
@@ -1271,37 +1339,44 @@ class MusicExperience {
             this.playSoundEffect('doorOpen');
         }
 
-        // Apply entrance acoustic transition
-        this.transitionRoomAcoustics('outside', 'clubInterior', 1.5);
+        // Apply entrance acoustic transition - use a gradual transition through "hallway" first
+        this.transitionRoomAcoustics('outside', 'hallway', 0.5);
+        setTimeout(() => {
+            this.transitionRoomAcoustics('hallway', 'clubInterior', 1.0);
+        }, 500);
 
-        // For spatial audio
+        // For spatial audio - implement smoother crossfade
         if (this.djLeftSpeaker && this.djRightSpeaker) {
-            // Fade in the club speakers - reduced from 3.0 to 1.8
-            this.fadeAudioNode(this.djLeftSpeaker.gainNode.gain, 1.8, 1.0); 
-            this.fadeAudioNode(this.djRightSpeaker.gainNode.gain, 1.8, 1.0); 
+            // Smoothly fade out outside sound
+            this.fadeAudioNode(this.outsideGain.gain, 0, 0.8);
             
-            // Fade in surround speakers - reduced from 1.8 to 1.2
-            this.surroundSpeakers.forEach(speaker => {
-                this.fadeAudioNode(speaker.gainNode.gain, 1.2, 1.5); 
-            });
-            
-            // Fade out the outside source
-            this.fadeAudioNode(this.outsideGain.gain, 0, 1.0);
+            // Delayed fade-in for club speakers to simulate passing through doorway
+            setTimeout(() => {
+                // Fade in the club speakers 
+                this.fadeAudioNode(this.djLeftSpeaker.gainNode.gain, 1.8, 1.0);
+                this.fadeAudioNode(this.djRightSpeaker.gainNode.gain, 1.8, 1.0);
+                
+                // Fade in surround speakers with a slight delay for more realistic sound propagation
+                setTimeout(() => {
+                    this.surroundSpeakers.forEach(speaker => {
+                        this.fadeAudioNode(speaker.gainNode.gain, 1.2, 1.0);
+                    });
+                }, 200);
+            }, 300);
         } 
         // For fallback audio
         else if (this.insideGain && this.outsideGain) {
-            this.fadeAudio(this.outsideGain, 0, 1);
-            this.fadeAudio(this.insideGain, 1.8, 1); // Reduced from 3 to 1.8
+            this.fadeAudio(this.outsideGain, 0, 0.8);
+            
+            // Delayed fade-in for inside
+            setTimeout(() => {
+                this.fadeAudio(this.insideGain, 1.8, 1.2);
+            }, 300);
         }
 
-        // Stop crowd chatter
+        // Stop crowd chatter with a proper fade-out
         if (this.crowdSound && this.crowdSound.gainNode) {
-            // Add a fade out before stopping for smoother transition
-            if (this.crowdSound.gainNode) {
-                this.fadeAudioNode(this.crowdSound.gainNode.gain, 0, 0.5);
-            } else if (this.crowdSound.source) {
-                this.fadeAudio(this.crowdSound.gainNode, 0, 0.5);
-            }
+            this.fadeAudioNode(this.crowdSound.gainNode.gain, 0, 0.5);
             
             setTimeout(() => {
                 if (this.crowdSound && this.crowdSound.source) {
@@ -1310,7 +1385,7 @@ class MusicExperience {
                     } catch (e) {
                         console.warn("Error stopping crowd sound:", e);
                     }
-                    this.crowdSound = null; 
+                    this.crowdSound = null;
                 }
             }, 500);
         }
@@ -1363,42 +1438,61 @@ class MusicExperience {
             this.playSoundEffect('doorOpen');
         }
 
-        // Apply exit acoustic transition
-        this.transitionRoomAcoustics('clubInterior', 'outside', 1.5);
+        // Apply exit acoustic transition - use a gradual transition through "hallway" first
+        this.transitionRoomAcoustics('clubInterior', 'hallway', 0.5);
+        setTimeout(() => {
+            this.transitionRoomAcoustics('hallway', 'outside', 1.0);
+        }, 500);
 
-        // Restart crowd chatter if audio is initialized
+        // Restart crowd chatter with gradual fade-in
         if (this.audioInitialized) {
             if (this.playSpatialSoundEffect) {
-                this.crowdSound = this.playSpatialSoundEffect('crowdChatter', true, 1.2); 
+                this.crowdSound = this.playSpatialSoundEffect('crowdChatter', true, 0.01); // Start very quiet
+                if (this.crowdSound && this.crowdSound.gainNode) {
+                    this.fadeAudioNode(this.crowdSound.gainNode.gain, 1.0, 2.0); // Fade in over 2 seconds
+                }
             } else {
-                this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.8); 
+                this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.01); // Start very quiet
+                if (this.crowdSound && this.crowdSound.gainNode) {
+                    this.fadeAudio(this.crowdSound.gainNode, 0.8, 2.0); // Fade in over 2 seconds
+                }
             }
         }
 
-        // For spatial audio
+        // For spatial audio - implement smoother crossfade
         if (this.djLeftSpeaker && this.djRightSpeaker) {
-            // Fade out the club speakers
-            this.fadeAudioNode(this.djLeftSpeaker.gainNode.gain, 0, 1.0);
-            this.fadeAudioNode(this.djRightSpeaker.gainNode.gain, 0, 1.0);
+            // First apply transition filters to create a more realistic "going through door" effect
+            // This gives a momentary "halfway" sound as you exit
             
-            // Fade out surround speakers
+            // Fade out the club speakers with a natural decay
+            this.fadeAudioNode(this.djLeftSpeaker.gainNode.gain, 0, 1.2);
+            this.fadeAudioNode(this.djRightSpeaker.gainNode.gain, 0, 1.2);
+            
+            // Fade out surround speakers slightly faster 
             this.surroundSpeakers.forEach(speaker => {
-                this.fadeAudioNode(speaker.gainNode.gain, 0, 1.0);
+                this.fadeAudioNode(speaker.gainNode.gain, 0, 0.8);
             });
             
-            // Fade in the outside source - reduced from 1.5 to 1.0
-            this.fadeAudioNode(this.outsideGain.gain, 1.0, 1.5); 
+            // Slightly delayed fade-in for outside sound to simulate passing through doorway
+            setTimeout(() => {
+                // Fade in the outside source
+                this.fadeAudioNode(this.outsideGain.gain, 0.75, 1.0); // Reduced from 1.0 to 0.75 for better balance
+            }, 300);
         } 
         // For fallback audio
         else if (this.insideGain && this.outsideGain) {
             this.fadeAudio(this.insideGain, 0, 1);
-            this.fadeAudio(this.outsideGain, 0.6, 1); // Reduced from 0.9 to 0.6
+            
+            // Slightly delayed fade-in for outside
+            setTimeout(() => {
+                this.fadeAudio(this.outsideGain, 0.5, 1.0); // Reduced from 0.6 to 0.5
+            }, 300);
         }
 
         // Remove dancing class if active
         document.body.classList.remove('dancing');
     }
-    
+
     transitionRoomAcoustics(fromRoom, toRoom, duration) {
         if (!this.reverbs || !this.reverbs[fromRoom] || !this.reverbs[toRoom]) return;
         
@@ -1418,19 +1512,40 @@ class MusicExperience {
         this.reverbs[toRoom].connect(this.reverbMixB);
         
         // Connect both to the output
-        this.reverbMixA.connect(this.audioContext.destination);
-        this.reverbMixB.connect(this.audioContext.destination);
+        this.reverbMixA.connect(this.masterVolumeNode);
+        this.reverbMixB.connect(this.masterVolumeNode);
         
-        // Fade between them
+        // Use exponential ramp for more natural acoustic transitions
         const currentTime = this.audioContext.currentTime;
-        this.reverbMixA.gain.linearRampToValueAtTime(0, currentTime + duration);
-        this.reverbMixB.gain.linearRampToValueAtTime(1, currentTime + duration);
+        this.reverbMixA.gain.setValueAtTime(this.reverbMixA.gain.value, currentTime);
+        this.reverbMixB.gain.setValueAtTime(this.reverbMixB.gain.value, currentTime);
+        
+        // Use exponential fade for more natural sound
+        try {
+            this.reverbMixA.gain.exponentialRampToValueAtTime(0.001, currentTime + duration); // Can't ramp to 0
+            this.reverbMixB.gain.exponentialRampToValueAtTime(1, currentTime + duration);
+            
+            // Set to exact values after ramp completes
+            setTimeout(() => {
+                this.reverbMixA.gain.value = 0;
+                this.reverbMixB.gain.value = 1;
+            }, duration * 1000);
+        } catch (e) {
+            // Fallback to linear ramp if exponential fails
+            console.warn("Using linear ramp for reverb transition", e);
+            this.reverbMixA.gain.linearRampToValueAtTime(0, currentTime + duration);
+            this.reverbMixB.gain.linearRampToValueAtTime(1, currentTime + duration);
+        }
         
         // Cleanup after transition
         setTimeout(() => {
-            this.reverbs[fromRoom].disconnect(this.reverbMixA);
-            this.reverbMixA.disconnect();
-        }, duration * 1000);
+            try {
+                this.reverbs[fromRoom].disconnect(this.reverbMixA);
+                this.reverbMixA.disconnect();
+            } catch (e) {
+                console.warn("Error disconnecting reverb", e);
+            }
+        }, duration * 1000 + 100);
     }
 
     fadeAudioNode(audioParam, targetValue, duration) {
