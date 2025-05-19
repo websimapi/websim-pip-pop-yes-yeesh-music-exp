@@ -84,6 +84,7 @@ class MusicExperience {
             this.setupLights();
             this.setupPostProcessing();
             this.createClubScene();
+            this.setupAcousticMaterials();
             
             // Then set up audio with spatial positioning
             await this.setupRaytracedAudio();
@@ -346,9 +347,13 @@ class MusicExperience {
     setupSpatialAudioSources(audioBuffer) {
         // Create multiple audio emitters in the club for a more realistic sound field
         
-        // Main DJ booth speakers (stereo pair)
+        // Main DJ booth speakers (stereo pair) - Increased volume for better projection
         this.djLeftSpeaker = this.createSpatialSource(audioBuffer, new THREE.Vector3(-3, 3, -14));
         this.djRightSpeaker = this.createSpatialSource(audioBuffer, new THREE.Vector3(3, 3, -14));
+        
+        // Additional power amplification for main speakers
+        this.djLeftSpeaker.gainNode.gain.value = 2.5; // Increased for stronger projection
+        this.djRightSpeaker.gainNode.gain.value = 2.5; // Increased for stronger projection
         
         // Corner/wall speakers for surround effect
         this.surroundSpeakers = [
@@ -375,9 +380,9 @@ class MusicExperience {
         // Add slight reverb for outdoor acoustics
         this.outsideReverb = this.reverbs.outside;
         
-        // Outside gain control
+        // Outside gain control - increased for better audio projection
         this.outsideGain = this.audioContext.createGain();
-        this.outsideGain.gain.value = 0.5;
+        this.outsideGain.gain.value = 0.8; // Increased from 0.5
         
         // Connect the chain for outside audio
         this.outsideSource.source.connect(this.outsideLowpass);
@@ -418,7 +423,7 @@ class MusicExperience {
             })
         ];
     }
-    
+
     createSpatialSource(buffer, position) {
         // Create audio source
         const source = this.audioContext.createBufferSource();
@@ -429,9 +434,9 @@ class MusicExperience {
         const panner = this.audioContext.createPanner();
         panner.panningModel = 'HRTF'; // Use Head Related Transfer Function for binaural audio
         panner.distanceModel = 'inverse'; // Realistic distance attenuation
-        panner.refDistance = 1;
-        panner.maxDistance = 30;
-        panner.rolloffFactor = 1.5;
+        panner.refDistance = 2; // Increased from 1 to make sound travel further
+        panner.maxDistance = 50; // Increased from 30 to extend audible range
+        panner.rolloffFactor = 0.8; // Reduced from 1.5 for less steep falloff
         panner.coneInnerAngle = 360; // Non-directional by default
         panner.coneOuterAngle = 360;
         panner.coneOuterGain = 0;
@@ -443,7 +448,7 @@ class MusicExperience {
         
         // Create gain node for volume control
         const gainNode = this.audioContext.createGain();
-        gainNode.gain.value = 1.0;
+        gainNode.gain.value = 1.5; // Increased from 1.0 for louder broadcasting
         
         // Connect the audio nodes
         source.connect(panner);
@@ -458,182 +463,48 @@ class MusicExperience {
             position // Store original position
         };
     }
-    
-    async loadSpatialSoundEffects() {
-        // Load sound effects with spatial positioning capabilities
-        this.soundEffects = {};
-        
-        try {
-            // Load all sound effect files
-            const effectFiles = [
-                {name: 'doorOpen', url: './door-open.wav', position: new THREE.Vector3(0, 2, 1)},
-                {name: 'crowdChatter', url: './crowd-chatter.wav', position: new THREE.Vector3(-3, 1, 5)},
-                {name: 'bassDrop', url: './bass-drop.wav', position: new THREE.Vector3(0, 2, -5)}
-            ];
-            
-            // Load each effect
-            await Promise.all(effectFiles.map(async (effect) => {
-                const response = await fetch(effect.url);
-                if (!response.ok) throw new Error(`Failed to load ${effect.url}`);
-                
-                const arrayBuffer = await response.arrayBuffer();
-                const audioBuffer = await this.decodeAudioData(arrayBuffer);
-                
-                // Store both buffer and position for spatial playback
-                this.soundEffects[effect.name] = {
-                    buffer: audioBuffer,
-                    position: effect.position
-                };
-            }));
-            
-        } catch (error) {
-            console.warn("Error loading spatial sound effects:", error);
-            // Create silent fallbacks
-            this.soundEffects = {
-                doorOpen: {
-                    buffer: this.createSilentAudioBuffer(2),
-                    position: new THREE.Vector3(0, 2, 1)
-                },
-                crowdChatter: {
-                    buffer: this.createSilentAudioBuffer(5),
-                    position: new THREE.Vector3(-3, 1, 5)
-                },
-                bassDrop: {
-                    buffer: this.createSilentAudioBuffer(3),
-                    position: new THREE.Vector3(0, 2, -5)
-                }
-            };
-        }
-    }
-    
-    playSpatialSoundEffect(name, loop = false, volume = 1.0) {
-        if (!this.audioContext || !this.soundEffects[name]) {
-            console.warn(`Sound effect "${name}" not available.`);
-            return null;
-        }
 
-        try {
-            const effect = this.soundEffects[name];
-            const source = this.audioContext.createBufferSource();
-            source.buffer = effect.buffer;
-            source.loop = loop;
-
-            // Create spatial panner
-            const panner = this.audioContext.createPanner();
-            panner.panningModel = 'HRTF';
-            panner.distanceModel = 'inverse';
-            panner.refDistance = 1;
-            panner.maxDistance = 30;
-            panner.rolloffFactor = 1.5;
-            
-            // Set position
-            panner.positionX.value = effect.position.x;
-            panner.positionY.value = effect.position.y;
-            panner.positionZ.value = effect.position.z;
-
-            // Create gain for volume control
-            const gainNode = this.audioContext.createGain();
-            gainNode.gain.value = volume;
-
-            // Connect nodes
-            source.connect(panner);
-            panner.connect(gainNode);
-            gainNode.connect(this.audioContext.destination);
-
-            // Start playback
-            source.start(0);
-
-            return { source, panner, gainNode };
-            
-        } catch (error) {
-            console.error(`Error playing spatial sound effect "${name}":`, error);
-            return null;
-        }
-    }
-    
-    async loadSoundEffect(name, url) {
-        try {
-            const response = await fetch(url);
-            if (!response.ok) {
-                throw new Error(`HTTP error fetching sound effect ${url}: status ${response.status}`);
+    setupAcousticMaterials() {
+        // Define material database with acoustic properties
+        this.acousticMaterials = {
+            // Format: { density, absorption coefficients by frequency band, transmission loss }
+            wood: { 
+                density: 700,  // kg/m³
+                absorption: { low: 0.15, mid: 0.20, high: 0.30 },
+                transmissionLoss: { low: 20, mid: 25, high: 35 }
+            },
+            glass: { 
+                density: 2500, 
+                absorption: { low: 0.05, mid: 0.03, high: 0.02 },
+                transmissionLoss: { low: 25, mid: 30, high: 35 }
+            },
+            concrete: { 
+                density: 2300, 
+                absorption: { low: 0.02, mid: 0.03, high: 0.04 },
+                transmissionLoss: { low: 35, mid: 45, high: 55 }
+            },
+            metal: { 
+                density: 7800, 
+                absorption: { low: 0.05, mid: 0.10, high: 0.10 },
+                transmissionLoss: { low: 30, mid: 40, high: 50 }
+            },
+            // Club door - heavy metal door with soundproofing
+            clubDoor: { 
+                density: 1500, // Heavy metal door with dampening
+                thickness: 0.1, // 10cm thick
+                absorption: { low: 0.15, mid: 0.30, high: 0.50 },
+                transmissionLoss: { low: 25, mid: 38, high: 45 }
             }
-            const arrayBuffer = await response.arrayBuffer();
-            const audioBuffer = await this.decodeAudioData(arrayBuffer);
-            this.soundEffects[name] = audioBuffer;
-            return audioBuffer;
-        } catch (error) {
-            console.error(`Error loading sound effect ${url}:`, error);
-            // Create a silent buffer as fallback
-            this.soundEffects[name] = this.createSilentAudioBuffer(2);
-            return null;
+        };
+
+        // Set materials for scene objects
+        if (this.door) {
+            this.door.userData.acousticMaterial = this.acousticMaterials.clubDoor;
         }
     }
 
-    playSoundEffect(name, loop = false, volume = 1.0) {
-        if (!this.audioContext || !this.soundEffects[name]) {
-            console.warn(`Sound effect "${name}" not available.`);
-            return null;
-        }
-
-        try {
-            const source = this.audioContext.createBufferSource();
-            source.buffer = this.soundEffects[name];
-            source.loop = loop;
-
-            const gainNode = this.audioContext.createGain();
-            gainNode.gain.value = volume;
-
-            source.connect(gainNode);
-            gainNode.connect(this.audioContext.destination);
-
-            source.start(0);
-
-            return { source, gainNode };
-        } catch (error) {
-            console.error(`Error playing sound effect "${name}":`, error);
-            return null;
-        }
-    }
-    
-    playOutdoorAmbience() {
-        // Play ambient crowd sound outside the club
-        if (this.audioInitialized) {
-            // Check if we're using spatial audio
-            if (this.playSpatialSoundEffect) {
-                this.crowdSound = this.playSpatialSoundEffect('crowdChatter', true, 0.6);
-            } else {
-                this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.4);
-            }
-        }
-    }
-    
-    updateAudioListenerPosition() {
-        if (!this.audioContext || !this.camera) return;
-        
-        // Get camera position and orientation
-        const cameraPosition = this.camera.position;
-        const cameraDirection = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-        const cameraUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion);
-        
-        // Update audio listener position (follows camera)
-        if (this.audioListener) {
-            // Web Audio API listener position
-            this.audioListener.positionX.value = cameraPosition.x;
-            this.audioListener.positionY.value = cameraPosition.y;
-            this.audioListener.positionZ.value = cameraPosition.z;
-            
-            // Web Audio API listener orientation
-            this.audioListener.forwardX.value = cameraDirection.x;
-            this.audioListener.forwardY.value = cameraDirection.y;
-            this.audioListener.forwardZ.value = cameraDirection.z;
-            this.audioListener.upX.value = cameraUp.x;
-            this.audioListener.upY.value = cameraUp.y;
-            this.audioListener.upZ.value = cameraUp.z;
-        }
-    }
-    
     updateAudioOcclusion() {
-        if (!this.isInside || !this.audioInitialized || !this.audioEmitters) return;
+        if (!this.audioInitialized || !this.audioEmitters) return;
         
         // Cast rays from each audio source to the listener to check for occlusion
         const listenerPosition = new THREE.Vector3(
@@ -659,35 +530,93 @@ class MusicExperience {
             // Check for intersections with objects in the scene
             const intersects = raycaster.intersectObjects(this.reflectiveSurfaces, true);
             
-            // Calculate occlusion factor based on objects between source and listener
+            // Calculate occlusion factors
             let occlusionFactor = 1.0; // 1.0 = no occlusion
+            let doorTransmission = { low: 1.0, mid: 1.0, high: 1.0 }; // Default: full transmission
             
             if (intersects.length > 0) {
-                // Some object is between source and listener
-                // Reduce volume more for each object in the path
-                occlusionFactor = Math.max(0.3, 1.0 - (intersects.length * 0.2));
-                
-                // Apply low-pass filter for occlusion effect if we have a filter
-                if (emitter.source.filter) {
-                    // Reduce high frequencies when occluded
-                    emitter.source.filter.frequency.value = 500 + (10000 * occlusionFactor);
+                // Process intersections to calculate acoustic effects
+                for (let i = 0; i < intersects.length; i++) {
+                    const intersectedObject = intersects[i].object;
+                    
+                    // Check if this is the door
+                    if (intersectedObject === this.door && intersectedObject.userData.acousticMaterial) {
+                        const doorMaterial = intersectedObject.userData.acousticMaterial;
+                        
+                        // Calculate frequency-dependent transmission through door
+                        // Based on mass law of acoustics and material properties
+                        doorTransmission.low = Math.max(0.05, 1.0 - (doorMaterial.transmissionLoss.low / 60));
+                        doorTransmission.mid = Math.max(0.02, 1.0 - (doorMaterial.transmissionLoss.mid / 60));
+                        doorTransmission.high = Math.max(0.01, 1.0 - (doorMaterial.transmissionLoss.high / 60));
+                        
+                        // Further reduce transmission based on thickness and density
+                        const densityFactor = doorMaterial.density / 1000;
+                        const thicknessFactor = doorMaterial.thickness * 10;
+                        const totalFactor = densityFactor * thicknessFactor;
+                        
+                        doorTransmission.low /= (1 + totalFactor * 0.5);
+                        doorTransmission.mid /= (1 + totalFactor * 1.0);
+                        doorTransmission.high /= (1 + totalFactor * 2.0);
+                        
+                        // Overall occlusion including door
+                        occlusionFactor *= (doorTransmission.low * 0.5 + doorTransmission.mid * 0.3 + doorTransmission.high * 0.2);
+                    } else {
+                        // Generic occlusion for other objects
+                        occlusionFactor *= 0.7;
+                    }
                 }
-            } else if (emitter.source.filter) {
-                // No occlusion, full frequency range
-                emitter.source.filter.frequency.value = 20000;
             }
             
-            // Distance-based attenuation (in addition to the Web Audio API's built-in models)
-            const distanceFactor = 1.0 / (1.0 + distance * 0.1);
+            // Distance-based attenuation (modified to travel further)
+            const distanceFactor = 1.0 / (1.0 + distance * 0.05); // Reduced from 0.1 for further travel
             
             // Apply combined factors to volume
-            const targetVolume = distanceFactor * occlusionFactor * (this.isInside ? 1.0 : 0.0);
+            let targetVolume;
+            if (this.isInside) {
+                targetVolume = distanceFactor * occlusionFactor * 1.0;
+            } else {
+                // When outside, apply door physics for sound coming through the door
+                targetVolume = distanceFactor * occlusionFactor * doorTransmission.low * 0.8; // Bass carries through
+            }
             
-            // Smoothly adjust volume to target (to avoid clicks/pops)
+            // Apply the calculated volume smoothly
             if (emitter.source.gainNode) {
                 const currentVolume = emitter.source.gainNode.gain.value;
                 const newVolume = currentVolume + (targetVolume - currentVolume) * 0.1;
                 emitter.source.gainNode.gain.value = newVolume;
+            }
+            
+            // Apply frequency-dependent filtering based on door physics when outside
+            if (!this.isInside && emitter.source.filter) {
+                if (!emitter.source.lowFilter) {
+                    // Create filters for frequency bands if they don't exist
+                    emitter.source.lowFilter = this.audioContext.createBiquadFilter();
+                    emitter.source.lowFilter.type = 'lowshelf';
+                    emitter.source.lowFilter.frequency.value = 250;
+                    
+                    emitter.source.midFilter = this.audioContext.createBiquadFilter();
+                    emitter.source.midFilter.type = 'peaking';
+                    emitter.source.midFilter.frequency.value = 1000;
+                    emitter.source.midFilter.Q.value = 1.0;
+                    
+                    emitter.source.highFilter = this.audioContext.createBiquadFilter();
+                    emitter.source.highFilter.type = 'highshelf';
+                    emitter.source.highFilter.frequency.value = 3000;
+                    
+                    // Connect the filters if we're going through a door
+                    if (doorTransmission.low < 0.99) {
+                        emitter.source.filter.disconnect();
+                        emitter.source.filter.connect(emitter.source.lowFilter);
+                        emitter.source.lowFilter.connect(emitter.source.midFilter);
+                        emitter.source.midFilter.connect(emitter.source.highFilter);
+                        emitter.source.highFilter.connect(emitter.source.gainNode);
+                    }
+                }
+                
+                // Set filter gains based on door transmission
+                emitter.source.lowFilter.gain.value = -10 * (1 - doorTransmission.low);
+                emitter.source.midFilter.gain.value = -20 * (1 - doorTransmission.mid);
+                emitter.source.highFilter.gain.value = -30 * (1 - doorTransmission.high);
             }
         });
     }
@@ -867,33 +796,32 @@ class MusicExperience {
         entrance.receiveShadow = true;
         this.exteriorGroup.add(entrance);
 
-        // Club door
+        // Club door - modify door creation to include material properties
         const doorGeometry = new THREE.PlaneGeometry(3, 5);
         const doorMaterial = new THREE.MeshStandardMaterial({
-            color: 0x000000,
+            color: 0x333333, // Changed from black to dark gray to show thickness
             roughness: 0.8,
-            metalness: 0.5,
+            metalness: 0.7, // Higher metalness to appear more solid
             emissive: 0x330000,
             emissiveIntensity: 0.5
         });
         this.door = new THREE.Mesh(doorGeometry, doorMaterial);
         this.door.position.y = 2.5;
         this.door.position.z = 1.01;
-        this.exteriorGroup.add(this.door);
-
-        // Club sign
-        const logoTexture = new THREE.TextureLoader().load('club-logo.png');
-        const signGeometry = new THREE.PlaneGeometry(8, 2);
-        const signMaterial = new THREE.MeshBasicMaterial({
-            map: logoTexture,
-            transparent: true,
-            emissive: 0xff00cc,
-            emissiveIntensity: 0.5
-        });
-        const sign = new THREE.Mesh(signGeometry, signMaterial);
-        sign.position.y = 7;
-        sign.position.z = 1;
-        this.exteriorGroup.add(sign);
+        
+        // Add a back face to make the door look more solid
+        const doorBackMaterial = doorMaterial.clone();
+        doorBackMaterial.color.set(0x222222);
+        const doorBack = new THREE.Mesh(doorGeometry, doorBackMaterial);
+        doorBack.position.y = 2.5;
+        doorBack.position.z = 0.99;
+        doorBack.rotation.y = Math.PI;
+        
+        // Group door parts
+        this.doorGroup = new THREE.Group();
+        this.doorGroup.add(this.door);
+        this.doorGroup.add(doorBack);
+        this.exteriorGroup.add(this.doorGroup);
 
         // People in line
         this.createPeopleInLine();
@@ -1244,6 +1172,31 @@ class MusicExperience {
             this.audioContext.resume().catch(err => console.error("Error resuming audio context:", err));
         }
 
+        // Animate door opening
+        if (this.doorGroup) {
+            // Animate door rotation
+            const doorOpenTween = {
+                progress: 0
+            };
+            
+            const doorOpenAnimation = () => {
+                doorOpenTween.progress += 0.03;
+                if (doorOpenTween.progress >= 1) {
+                    doorOpenTween.progress = 1;
+                    cancelAnimationFrame(doorAnimationFrame);
+                }
+                
+                const openAngle = Math.PI * 0.4 * doorOpenTween.progress;
+                this.doorGroup.rotation.y = openAngle;
+                
+                if (doorOpenTween.progress < 1) {
+                    doorAnimationFrame = requestAnimationFrame(doorOpenAnimation);
+                }
+            };
+            
+            let doorAnimationFrame = requestAnimationFrame(doorOpenAnimation);
+        }
+
         // Switch scenes
         document.getElementById('outside-club').classList.remove('active');
         document.getElementById('inside-club').classList.add('active');
@@ -1335,6 +1288,31 @@ class MusicExperience {
         // Ensure audio context is running
         if (this.audioContext && this.audioContext.state === 'suspended') {
             this.audioContext.resume().catch(err => console.error("Error resuming audio context:", err));
+        }
+
+        // Animate door closing
+        if (this.doorGroup) {
+            // Reset door rotation (close the door)
+            const doorCloseTween = {
+                progress: 1 // Start from open position
+            };
+            
+            const doorCloseAnimation = () => {
+                doorCloseTween.progress -= 0.03;
+                if (doorCloseTween.progress <= 0) {
+                    doorCloseTween.progress = 0;
+                    cancelAnimationFrame(doorAnimationFrame);
+                }
+                
+                const openAngle = Math.PI * 0.4 * doorCloseTween.progress;
+                this.doorGroup.rotation.y = openAngle;
+                
+                if (doorCloseTween.progress > 0) {
+                    doorAnimationFrame = requestAnimationFrame(doorCloseAnimation);
+                }
+            };
+            
+            let doorAnimationFrame = requestAnimationFrame(doorCloseAnimation);
         }
 
         // Switch scenes
