@@ -39,8 +39,8 @@ class MusicExperience {
             }
         };
         
-        // Master volume control
-        this.masterVolume = 3.0;
+        // Master volume control - reduced from 3.0 to 1.5
+        this.masterVolume = 1.5;
         
         // Setup event for starting the experience
         this.setupStartButton();
@@ -388,9 +388,9 @@ class MusicExperience {
         // Add slight reverb for outdoor acoustics
         this.outsideReverb = this.reverbs.outside;
         
-        // Outside gain control - increased by 3x
+        // Outside gain control - reduced from 1.5 to 1.0
         this.outsideGain = this.audioContext.createGain();
-        this.outsideGain.gain.value = 1.5; 
+        this.outsideGain.gain.value = 1.0; 
         
         // Connect the chain for outside audio
         this.outsideSource.source.connect(this.outsideLowpass);
@@ -455,9 +455,9 @@ class MusicExperience {
         panner.positionY.value = position.y;
         panner.positionZ.value = position.z;
         
-        // Create gain node for volume control with higher default
+        // Create gain node for volume control - reduced from 3.0 to 1.8
         const gainNode = this.audioContext.createGain();
-        gainNode.gain.value = 3.0; 
+        gainNode.gain.value = 1.8; 
         
         // Connect the audio nodes
         source.connect(panner);
@@ -520,7 +520,8 @@ class MusicExperience {
         }
     }
     
-    playSpatialSoundEffect(name, loop = false, volume = 3.0) { 
+    playSpatialSoundEffect(name, loop = false, volume = 1.8) { 
+        // Default volume reduced from 3.0 to 1.8
         if (!this.audioContext || !this.soundEffects[name]) {
             console.warn(`Sound effect "${name}" not available.`);
             return null;
@@ -565,7 +566,8 @@ class MusicExperience {
         }
     }
     
-    playSoundEffect(name, loop = false, volume = 3.0) { 
+    playSoundEffect(name, loop = false, volume = 1.8) { 
+        // Default volume reduced from 3.0 to 1.8
         if (!this.audioContext || !this.soundEffects[name]) {
             console.warn(`Sound effect "${name}" not available.`);
             return null;
@@ -596,9 +598,9 @@ class MusicExperience {
         if (this.audioInitialized) {
             // Check if we're using spatial audio
             if (this.playSpatialSoundEffect) {
-                this.crowdSound = this.playSpatialSoundEffect('crowdChatter', true, 1.8); 
+                this.crowdSound = this.playSpatialSoundEffect('crowdChatter', true, 1.2); // Reduced from 1.8 to 1.2
             } else {
-                this.crowdSound = this.playSoundEffect('crowdChatter', true, 1.2); 
+                this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.8); // Reduced from 1.2 to 0.8
             }
         }
     }
@@ -1274,13 +1276,13 @@ class MusicExperience {
 
         // For spatial audio
         if (this.djLeftSpeaker && this.djRightSpeaker) {
-            // Fade in the club speakers to higher levels
-            this.fadeAudioNode(this.djLeftSpeaker.gainNode.gain, 3.0, 1.0); 
-            this.fadeAudioNode(this.djRightSpeaker.gainNode.gain, 3.0, 1.0); 
+            // Fade in the club speakers - reduced from 3.0 to 1.8
+            this.fadeAudioNode(this.djLeftSpeaker.gainNode.gain, 1.8, 1.0); 
+            this.fadeAudioNode(this.djRightSpeaker.gainNode.gain, 1.8, 1.0); 
             
-            // Fade in surround speakers
+            // Fade in surround speakers - reduced from 1.8 to 1.2
             this.surroundSpeakers.forEach(speaker => {
-                this.fadeAudioNode(speaker.gainNode.gain, 1.8, 1.5); 
+                this.fadeAudioNode(speaker.gainNode.gain, 1.2, 1.5); 
             });
             
             // Fade out the outside source
@@ -1289,7 +1291,7 @@ class MusicExperience {
         // For fallback audio
         else if (this.insideGain && this.outsideGain) {
             this.fadeAudio(this.outsideGain, 0, 1);
-            this.fadeAudio(this.insideGain, 3, 1); 
+            this.fadeAudio(this.insideGain, 1.8, 1); // Reduced from 3 to 1.8
         }
 
         // Stop crowd chatter
@@ -1367,9 +1369,9 @@ class MusicExperience {
         // Restart crowd chatter if audio is initialized
         if (this.audioInitialized) {
             if (this.playSpatialSoundEffect) {
-                this.crowdSound = this.playSpatialSoundEffect('crowdChatter', true, 1.8); 
+                this.crowdSound = this.playSpatialSoundEffect('crowdChatter', true, 1.2); 
             } else {
-                this.crowdSound = this.playSoundEffect('crowdChatter', true, 1.2); 
+                this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.8); 
             }
         }
 
@@ -1384,13 +1386,13 @@ class MusicExperience {
                 this.fadeAudioNode(speaker.gainNode.gain, 0, 1.0);
             });
             
-            // Fade in the outside source at higher level
-            this.fadeAudioNode(this.outsideGain.gain, 1.5, 1.5); 
+            // Fade in the outside source - reduced from 1.5 to 1.0
+            this.fadeAudioNode(this.outsideGain.gain, 1.0, 1.5); 
         } 
         // For fallback audio
         else if (this.insideGain && this.outsideGain) {
             this.fadeAudio(this.insideGain, 0, 1);
-            this.fadeAudio(this.outsideGain, 0.9, 1); 
+            this.fadeAudio(this.outsideGain, 0.6, 1); // Reduced from 0.9 to 0.6
         }
 
         // Remove dancing class if active
