@@ -4,7 +4,6 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { gsap } from 'gsap'; 
 
 // Main application class
 class MusicExperience {
@@ -15,47 +14,33 @@ class MusicExperience {
         this.loadingProgress = document.querySelector('.loading-progress');
         this.loadingMessage = document.querySelector('.loading-message');
         
-        // Door material properties for audio transmission
-        this.doorProperties = {
-            density: 400, // kg/m³ (typical wooden door)
-            thickness: 0.05, // 5cm thick
-            closed: true, // Door state
-            absorption: {
-                low: 0.28, // Absorption coefficients by frequency
-                mid: 0.22,
-                high: 0.17
-            },
-            transmission: {
-                low: 0.15, // Transmission coefficients by frequency
-                mid: 0.08, 
-                high: 0.04
-            }
-        };
-        
         // Audio raytracing properties
         this.audioSources = [];
         this.audioEmitters = [];
         this.reflectiveSurfaces = [];
         this.roomAcoustics = {
             outside: {
-                reflectionLevel: 0.1,
+                reflectionLevel: 0.3,
                 reverbTime: 0.1,
-                damping: 0.7,
+                damping: 0.5,
                 diffusion: 0.3
             },
             clubInterior: {
-                reflectionLevel: 0.8,
-                reverbTime: 1.8,
-                damping: 0.2,
-                diffusion: 0.8
+                reflectionLevel: 2.0,
+                reverbTime: 2.0,
+                damping: 0.1,
+                diffusion: 0.9
             },
             hallway: {
-                reflectionLevel: 0.4,
-                reverbTime: 0.6,
-                damping: 0.5,
-                diffusion: 0.5
+                reflectionLevel: 1.0,
+                reverbTime: 0.8,
+                damping: 0.3,
+                diffusion: 0.6
             }
         };
+        
+        // Master volume control
+        this.masterVolume = 3.0;
         
         // Setup event for starting the experience
         this.setupStartButton();
@@ -167,6 +152,11 @@ class MusicExperience {
             this.analyser.fftSize = 256;
             this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
             
+            // Add master volume control node
+            this.masterVolumeNode = this.audioContext.createGain();
+            this.masterVolumeNode.gain.value = this.masterVolume;
+            this.masterVolumeNode.connect(this.audioContext.destination);
+            
             // Set up room acoustics and reverb
             await this.setupRoomAcoustics();
             
@@ -267,6 +257,11 @@ class MusicExperience {
         // Create dry/wet mix for adjustable reverb amount
         this.reverbMix = this.audioContext.createGain();
         this.directMix = this.audioContext.createGain();
+        
+        // Connect reverbs to master volume instead of directly to destination
+        Object.values(this.reverbs).forEach(reverb => {
+            reverb.connect(this.masterVolumeNode);
+        });
     }
     
     async generateRoomImpulse({ reflectionLevel, reverbTime, damping, diffusion }) {
@@ -277,13 +272,13 @@ class MusicExperience {
         const impulseL = impulse.getChannelData(0);
         const impulseR = impulse.getChannelData(1);
         
-        // Generate early reflections and late reverb
+        // Generate early reflections and late reverb with increased intensity
         for (let i = 0; i < length; i++) {
             const t = i / sampleRate;
             // Early reflections (more distinct)
             if (t < 0.1) {
                 if (i % Math.floor(0.01 * sampleRate) === 0) {
-                    const reflection = reflectionLevel * Math.exp(-t * 5) * (0.95 - Math.random() * 0.1);
+                    const reflection = reflectionLevel * 2.5 * Math.exp(-t * 4) * (0.95 - Math.random() * 0.1);
                     impulseL[i] = reflection * (Math.random() * 2 - 1);
                     impulseR[i] = reflection * (Math.random() * 2 - 1);
                 }
@@ -291,11 +286,11 @@ class MusicExperience {
             // Late reverb (more diffuse)
             else {
                 // Exponential decay
-                const decay = Math.exp(-t * damping);
+                const decay = Math.exp(-t * damping * 0.8); 
                 // Increasing diffusion over time
                 const diffuseness = Math.min(1, t * diffusion * 10);
-                impulseL[i] = (Math.random() * 2 - 1) * decay * diffuseness * reflectionLevel;
-                impulseR[i] = (Math.random() * 2 - 1) * decay * diffuseness * reflectionLevel;
+                impulseL[i] = (Math.random() * 2 - 1) * decay * diffuseness * reflectionLevel * 2.0;
+                impulseR[i] = (Math.random() * 2 - 1) * decay * diffuseness * reflectionLevel * 2.0;
             }
         }
         
@@ -332,7 +327,7 @@ class MusicExperience {
             } catch (fallbackError) {
                 console.error("Fallback audio also failed:", fallbackError);
                 // Create silent audio as last resort fallback
-                const silentBuffer = this.createSilentAudioBuffer(30); // 30 seconds
+                const silentBuffer = this.createSilentAudioBuffer(30); 
                 this.setupSpatialAudioSources(silentBuffer);
                 throw new Error("Failed to load audio");
             }
@@ -354,7 +349,7 @@ class MusicExperience {
     createSilentAudioBuffer(durationSec) {
         const sampleRate = this.audioContext.sampleRate;
         const buffer = this.audioContext.createBuffer(
-            2, // stereo
+            2, 
             durationSec * sampleRate,
             sampleRate
         );
@@ -379,42 +374,37 @@ class MusicExperience {
         // Outside muffled audio (positioned behind the door for directional effect)
         this.outsideSource = this.createSpatialSource(audioBuffer, new THREE.Vector3(0, 2, -2));
         
-        // Connect outside source through filtering based on door physics
+        // Connect outside source through heavy filtering for the muffled effect
         this.outsideSource.source.disconnect();
-        
-        // Low-pass filter for door transmission
         this.outsideLowpass = this.audioContext.createBiquadFilter();
         this.outsideLowpass.type = 'lowpass';
+        this.outsideLowpass.frequency.value = 300;
         
-        // High shelf filter for additional frequency-dependent attenuation
         this.outsideHighCut = this.audioContext.createBiquadFilter();
-        this.outsideHighCut.type = 'highshelf';
-        
-        // Apply door transmission properties initially
-        const doorTransmission = this.calculateDoorTransmission();
-        this.outsideLowpass.frequency.value = doorTransmission.lowpass;
-        this.outsideHighCut.frequency.value = doorTransmission.highShelf.frequency;
-        this.outsideHighCut.gain.value = doorTransmission.highShelf.gain;
+        this.outsideHighCut.type = 'lowshelf';
+        this.outsideHighCut.frequency.value = 400;
+        this.outsideHighCut.gain.value = -20;
         
         // Add slight reverb for outdoor acoustics
         this.outsideReverb = this.reverbs.outside;
         
-        // Outside gain control
+        // Outside gain control - increased by 3x
         this.outsideGain = this.audioContext.createGain();
-        this.outsideGain.gain.value = 0.1 + doorTransmission.lowGain * 0.4; // Adjusted based on door physics
+        this.outsideGain.gain.value = 1.5; 
         
         // Connect the chain for outside audio
         this.outsideSource.source.connect(this.outsideLowpass);
         this.outsideLowpass.connect(this.outsideHighCut);
         this.outsideHighCut.connect(this.outsideReverb);
         this.outsideReverb.connect(this.outsideGain);
-        this.outsideGain.connect(this.audioContext.destination);
+        this.outsideGain.connect(this.masterVolumeNode); 
         
         // Connect club speakers to analyser for visualization
         const clubAnalyserGain = this.audioContext.createGain();
         this.djLeftSpeaker.gainNode.connect(clubAnalyserGain);
         this.djRightSpeaker.gainNode.connect(clubAnalyserGain);
         clubAnalyserGain.connect(this.analyser);
+        this.analyser.connect(this.masterVolumeNode); 
         
         // Start all audio sources
         this.djLeftSpeaker.source.start(0);
@@ -451,12 +441,12 @@ class MusicExperience {
         
         // Create panner for spatial positioning
         const panner = this.audioContext.createPanner();
-        panner.panningModel = 'HRTF'; // Use Head Related Transfer Function for binaural audio
-        panner.distanceModel = 'inverse'; // Realistic distance attenuation
-        panner.refDistance = 3; // Increased from 1 to 3 for wider audible range
-        panner.maxDistance = 50; // Increased from 30 to 50 for further travel
-        panner.rolloffFactor = 1.0; // Reduced from 1.5 to 1.0 for less aggressive falloff
-        panner.coneInnerAngle = 360; // Non-directional by default
+        panner.panningModel = 'HRTF'; 
+        panner.distanceModel = 'inverse'; 
+        panner.refDistance = 3; 
+        panner.maxDistance = 50; 
+        panner.rolloffFactor = 0.8; 
+        panner.coneInnerAngle = 360; 
         panner.coneOuterAngle = 360;
         panner.coneOuterGain = 0;
         
@@ -465,21 +455,21 @@ class MusicExperience {
         panner.positionY.value = position.y;
         panner.positionZ.value = position.z;
         
-        // Create gain node for volume control
+        // Create gain node for volume control with higher default
         const gainNode = this.audioContext.createGain();
-        gainNode.gain.value = 1.5; // Increased from 1.0 to 1.5 for more power
+        gainNode.gain.value = 3.0; 
         
         // Connect the audio nodes
         source.connect(panner);
         panner.connect(gainNode);
-        gainNode.connect(this.audioContext.destination);
+        gainNode.connect(this.masterVolumeNode); 
         
         // Return all nodes for later control
         return {
             source,
             panner,
             gainNode,
-            position // Store original position
+            position 
         };
     }
     
@@ -530,7 +520,7 @@ class MusicExperience {
         }
     }
     
-    playSpatialSoundEffect(name, loop = false, volume = 1.0) {
+    playSpatialSoundEffect(name, loop = false, volume = 3.0) { 
         if (!this.audioContext || !this.soundEffects[name]) {
             console.warn(`Sound effect "${name}" not available.`);
             return null;
@@ -546,23 +536,23 @@ class MusicExperience {
             const panner = this.audioContext.createPanner();
             panner.panningModel = 'HRTF';
             panner.distanceModel = 'inverse';
-            panner.refDistance = 1;
-            panner.maxDistance = 30;
-            panner.rolloffFactor = 1.5;
+            panner.refDistance = 3; 
+            panner.maxDistance = 50; 
+            panner.rolloffFactor = 0.8; 
             
             // Set position
             panner.positionX.value = effect.position.x;
             panner.positionY.value = effect.position.y;
             panner.positionZ.value = effect.position.z;
 
-            // Create gain for volume control
+            // Create gain for volume control with higher value
             const gainNode = this.audioContext.createGain();
             gainNode.gain.value = volume;
 
             // Connect nodes
             source.connect(panner);
             panner.connect(gainNode);
-            gainNode.connect(this.audioContext.destination);
+            gainNode.connect(this.masterVolumeNode); 
 
             // Start playback
             source.start(0);
@@ -575,25 +565,7 @@ class MusicExperience {
         }
     }
     
-    async loadSoundEffect(name, url) {
-        try {
-            const response = await fetch(url);
-            if (!response.ok) {
-                throw new Error(`HTTP error fetching sound effect ${url}: status ${response.status}`);
-            }
-            const arrayBuffer = await response.arrayBuffer();
-            const audioBuffer = await this.decodeAudioData(arrayBuffer);
-            this.soundEffects[name] = audioBuffer;
-            return audioBuffer;
-        } catch (error) {
-            console.error(`Error loading sound effect ${url}:`, error);
-            // Create a silent buffer as fallback
-            this.soundEffects[name] = this.createSilentAudioBuffer(2);
-            return null;
-        }
-    }
-
-    playSoundEffect(name, loop = false, volume = 1.0) {
+    playSoundEffect(name, loop = false, volume = 3.0) { 
         if (!this.audioContext || !this.soundEffects[name]) {
             console.warn(`Sound effect "${name}" not available.`);
             return null;
@@ -608,7 +580,7 @@ class MusicExperience {
             gainNode.gain.value = volume;
 
             source.connect(gainNode);
-            gainNode.connect(this.audioContext.destination);
+            gainNode.connect(this.masterVolumeNode || this.audioContext.destination);
 
             source.start(0);
 
@@ -624,9 +596,9 @@ class MusicExperience {
         if (this.audioInitialized) {
             // Check if we're using spatial audio
             if (this.playSpatialSoundEffect) {
-                this.crowdSound = this.playSpatialSoundEffect('crowdChatter', true, 0.6);
+                this.crowdSound = this.playSpatialSoundEffect('crowdChatter', true, 1.8); 
             } else {
-                this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.4);
+                this.crowdSound = this.playSoundEffect('crowdChatter', true, 1.2); 
             }
         }
     }
@@ -684,46 +656,29 @@ class MusicExperience {
             const intersects = raycaster.intersectObjects(this.reflectiveSurfaces, true);
             
             // Calculate occlusion factor based on objects between source and listener
-            let occlusionFactor = 1.0; // 1.0 = no occlusion
-            let doorOcclusion = 1.0; // Default: no door occlusion
+            let occlusionFactor = 1.0; 
             
-            // Check if door is in the path
-            const doorIntersection = intersects.find(intersection => 
-                intersection.object === this.door);
-                
-            if (doorIntersection && !this.doorProperties.closed) {
-                // Door is in path but open - less occlusion
-                doorOcclusion = 0.8;
-            } else if (doorIntersection && this.doorProperties.closed) {
-                // Door is in path and closed - more occlusion
-                // Use our door transmission calculations
-                const doorTransmission = this.calculateDoorTransmission();
-                doorOcclusion = (doorTransmission.lowGain + doorTransmission.midGain + doorTransmission.highGain) / 3;
-            }
-            
-            // General occlusion from other objects
             if (intersects.length > 0) {
                 // Some object is between source and listener
-                // Reduce volume more for each object in the path
-                occlusionFactor = Math.max(0.3, 1.0 - (intersects.length * 0.2));
+                // Reduce volume more for each object in the path - but less than before
+                occlusionFactor = Math.max(0.5, 1.0 - (intersects.length * 0.1)); 
                 
                 // Apply low-pass filter for occlusion effect if we have a filter
                 if (emitter.source.filter) {
-                    // Reduce high frequencies when occluded
-                    emitter.source.filter.frequency.value = 500 + (10000 * occlusionFactor * doorOcclusion);
+                    // Reduce high frequencies when occluded, but keep more than before
+                    emitter.source.filter.frequency.value = 1000 + (10000 * occlusionFactor); 
                 }
             } else if (emitter.source.filter) {
                 // No occlusion, full frequency range
                 emitter.source.filter.frequency.value = 20000;
             }
             
-            // Distance-based attenuation - improved for longer range
-            // Using inverse square law but with improved rolloff characteristics
-            const distanceFactor = 1.0 / (1.0 + Math.pow(distance * 0.08, 1.8));
+            // Distance-based attenuation (in addition to the Web Audio API's built-in models)
+            // Reduced attenuation rate for volume
+            const distanceFactor = 1.0 / (1.0 + distance * 0.05); 
             
-            // Apply combined factors to volume
-            const targetVolume = distanceFactor * occlusionFactor * doorOcclusion * 
-                                 (this.isInside ? 1.0 : 0.2); // Increased volume inside
+            // Apply combined factors to volume - for inside club boost volume significantly
+            const targetVolume = distanceFactor * occlusionFactor * (this.isInside ? 3.0 : 1.5);
             
             // Smoothly adjust volume to target (to avoid clicks/pops)
             if (emitter.source.gainNode) {
@@ -741,7 +696,7 @@ class MusicExperience {
 
         // Create camera
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        this.camera.position.set(0, 2, 10); // Outside position
+        this.camera.position.set(0, 2, 10); 
 
         // Create renderer
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -761,7 +716,7 @@ class MusicExperience {
         this.controls.maxPolarAngle = Math.PI / 2;
         this.controls.minDistance = 1;
         this.controls.maxDistance = 20;
-        this.controls.enabled = false; // Disable controls initially
+        this.controls.enabled = false; 
 
         // Handle window resize
         window.addEventListener('resize', () => {
@@ -857,9 +812,9 @@ class MusicExperience {
         // Add bloom pass for glow effect
         this.bloomPass = new UnrealBloomPass(
             new THREE.Vector2(window.innerWidth, window.innerHeight),
-            1.5,  // strength
-            0.4,  // radius
-            0.85  // threshold
+            1.5,  
+            0.4,  
+            0.85  
         );
         this.composer.addPass(this.bloomPass);
     }
@@ -976,7 +931,7 @@ class MusicExperience {
 
         for (let i = 0; i < gridSize; i++) {
             for (let j = 0; j < gridSize; j++) {
-                if ((i + j) % 2 === 0) continue; // Checkerboard pattern
+                if ((i + j) % 2 === 0) continue; 
 
                 const tileMaterial = new THREE.MeshStandardMaterial({
                     color: 0xffffff,
@@ -990,7 +945,7 @@ class MusicExperience {
                 tile.rotation.x = -Math.PI / 2;
                 tile.position.x = (i - gridSize/2 + 0.5) * 2;
                 tile.position.z = (j - gridSize/2 + 0.5) * 2 - 5;
-                tile.position.y = 0.01; // Slightly above the main floor
+                tile.position.y = 0.01; 
                 this.floorTiles.push({
                     mesh: tile,
                     originalColor: new THREE.Color(0xffffff),
@@ -1280,72 +1235,6 @@ class MusicExperience {
         }
     }
 
-    calculateDoorTransmission() {
-        // Calculate transmission based on door properties and state
-        const { density, thickness, closed, absorption, transmission } = this.doorProperties;
-        
-        // Sound Transmission Class calculation (simplified)
-        // Higher values = better sound insulation
-        const massLaw = 14.3 * Math.log10(density * thickness) + 23; // Basic mass law
-        
-        // Calculate transmission loss in dB
-        const transmissionLoss = {
-            low: closed ? massLaw * 0.7 : 3, // Less transmission loss for low frequencies
-            mid: closed ? massLaw * 1.0 : 2, // Standard loss for mid frequencies
-            high: closed ? massLaw * 1.3 : 1  // More transmission loss for high frequencies
-        };
-        
-        // Convert transmission loss (dB) to filter parameters
-        return {
-            lowpass: closed ? 300 : 20000, // Cutoff frequency for low-pass filter
-            highShelf: {
-                frequency: 400,
-                gain: closed ? -20 : 0 // dB reduction for frequencies above 400Hz when closed
-            },
-            lowGain: closed ? Math.pow(10, -transmissionLoss.low/20) : 1, // Convert dB to gain multiplier
-            midGain: closed ? Math.pow(10, -transmissionLoss.mid/20) : 1,
-            highGain: closed ? Math.pow(10, -transmissionLoss.high/20) : 1
-        };
-    }
-
-    toggleDoorState(isOpen) {
-        this.doorProperties.closed = !isOpen;
-        
-        // Update door visuals
-        if (this.door) {
-            // Animate door opening/closing
-            const targetRotationY = isOpen ? Math.PI/2 : 0;
-            gsap.to(this.door.rotation, {
-                y: targetRotationY,
-                duration: 0.5,
-                ease: 'power2.out'
-            });
-        }
-        
-        // Update audio filtering for door transmission
-        if (this.audioInitialized) {
-            const doorTransmission = this.calculateDoorTransmission();
-            
-            // Update outside audio filtering
-            if (this.outsideLowpass) {
-                this.outsideLowpass.frequency.value = doorTransmission.lowpass;
-            }
-            
-            if (this.outsideHighCut) {
-                this.outsideHighCut.frequency.value = doorTransmission.highShelf.frequency;
-                this.outsideHighCut.gain.value = doorTransmission.highShelf.gain;
-            }
-            
-            // Set gain values based on frequency-dependent transmission
-            if (this.outsideGain) {
-                // Average the frequency gains for overall gain
-                const avgTransmission = (doorTransmission.lowGain + doorTransmission.midGain + doorTransmission.highGain) / 3;
-                // Scale between 0.1 and 0.7 based on door state
-                this.outsideGain.gain.value = isOpen ? 0.7 : (0.1 + avgTransmission * 0.3);
-            }
-        }
-    }
-
     enterClub() {
         // Ensure audio context is running (for browsers that require user interaction)
         if (this.audioContext && this.audioContext.state === 'suspended') {
@@ -1373,7 +1262,7 @@ class MusicExperience {
         this.camera.position.set(0, 3, 5);
         this.updateAudioListenerPosition();
 
-        // Play door sound (spatial if available)
+        // Play door open sound (spatial if available)
         if (this.playSpatialSoundEffect) {
             this.playSpatialSoundEffect('doorOpen');
         } else {
@@ -1385,13 +1274,13 @@ class MusicExperience {
 
         // For spatial audio
         if (this.djLeftSpeaker && this.djRightSpeaker) {
-            // Fade in the club speakers
-            this.fadeAudioNode(this.djLeftSpeaker.gainNode.gain, 1.0, 1.0);
-            this.fadeAudioNode(this.djRightSpeaker.gainNode.gain, 1.0, 1.0);
+            // Fade in the club speakers to higher levels
+            this.fadeAudioNode(this.djLeftSpeaker.gainNode.gain, 3.0, 1.0); 
+            this.fadeAudioNode(this.djRightSpeaker.gainNode.gain, 3.0, 1.0); 
             
             // Fade in surround speakers
             this.surroundSpeakers.forEach(speaker => {
-                this.fadeAudioNode(speaker.gainNode.gain, 0.6, 1.5);
+                this.fadeAudioNode(speaker.gainNode.gain, 1.8, 1.5); 
             });
             
             // Fade out the outside source
@@ -1400,7 +1289,7 @@ class MusicExperience {
         // For fallback audio
         else if (this.insideGain && this.outsideGain) {
             this.fadeAudio(this.outsideGain, 0, 1);
-            this.fadeAudio(this.insideGain, 1, 1);
+            this.fadeAudio(this.insideGain, 3, 1); 
         }
 
         // Stop crowd chatter
@@ -1419,13 +1308,24 @@ class MusicExperience {
                     } catch (e) {
                         console.warn("Error stopping crowd sound:", e);
                     }
-                    this.crowdSound = null; // Clear reference
+                    this.crowdSound = null; 
                 }
             }, 500);
         }
 
-        // Open door for audio transmission
-        this.toggleDoorState(true);
+        // After door open sound, play bass drop
+        setTimeout(() => {
+            if (this.playSpatialSoundEffect) {
+                this.playSpatialSoundEffect('bassDrop');
+            } else {
+                this.playSoundEffect('bassDrop');
+            }
+        }, 1000);
+
+        // Show instructions if first time
+        if (!localStorage.getItem('instructionsShown')) {
+            document.getElementById('instructions').classList.remove('hidden');
+        }
     }
 
     exitClub() {
@@ -1467,9 +1367,9 @@ class MusicExperience {
         // Restart crowd chatter if audio is initialized
         if (this.audioInitialized) {
             if (this.playSpatialSoundEffect) {
-                this.crowdSound = this.playSpatialSoundEffect('crowdChatter', true, 0.6);
+                this.crowdSound = this.playSpatialSoundEffect('crowdChatter', true, 1.8); 
             } else {
-                this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.4);
+                this.crowdSound = this.playSoundEffect('crowdChatter', true, 1.2); 
             }
         }
 
@@ -1484,22 +1384,17 @@ class MusicExperience {
                 this.fadeAudioNode(speaker.gainNode.gain, 0, 1.0);
             });
             
-            // Fade in the outside source
-            this.fadeAudioNode(this.outsideGain.gain, 0.5, 1.5);
+            // Fade in the outside source at higher level
+            this.fadeAudioNode(this.outsideGain.gain, 1.5, 1.5); 
         } 
         // For fallback audio
         else if (this.insideGain && this.outsideGain) {
             this.fadeAudio(this.insideGain, 0, 1);
-            this.fadeAudio(this.outsideGain, 0.3, 1);
+            this.fadeAudio(this.outsideGain, 0.9, 1); 
         }
 
         // Remove dancing class if active
         document.body.classList.remove('dancing');
-        
-        // Close door after exit (delayed)
-        setTimeout(() => {
-            this.toggleDoorState(false);
-        }, 1000);
     }
     
     transitionRoomAcoustics(fromRoom, toRoom, duration) {
@@ -1546,7 +1441,7 @@ class MusicExperience {
             audioParam.linearRampToValueAtTime(targetValue, currentTime + duration);
         } catch (e) {
             console.warn("Error fading audio parameter:", e);
-            audioParam.value = targetValue; // Fallback
+            audioParam.value = targetValue; 
         }
     }
 

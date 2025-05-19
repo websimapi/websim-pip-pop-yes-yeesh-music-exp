@@ -280,48 +280,6 @@ body {
     visibility: hidden;
 }
 
-/* Add styles for the door animation */
-@keyframes doorOpen {
-    from { transform: rotateY(0deg); }
-    to { transform: rotateY(90deg); }
-}
-
-@keyframes doorClose {
-    from { transform: rotateY(90deg); }
-    to { transform: rotateY(0deg); }
-}
-
-.door-open {
-    transform-origin: left;
-    animation: doorOpen 0.5s forwards;
-}
-
-.door-closed {
-    transform-origin: left;
-    animation: doorClose 0.5s forwards;
-}
-
-/* Add a volume indicator CSS for debugging */
-.volume-indicator {
-    position: fixed;
-    bottom: 20px;
-    left: 20px;
-    z-index: 100;
-    width: 200px;
-    height: 20px;
-    background-color: rgba(0, 0, 0, 0.7);
-    border-radius: 10px;
-    overflow: hidden;
-    pointer-events: none;
-}
-
-.volume-level {
-    height: 100%;
-    width: 0%;
-    background: linear-gradient(90deg, #00ff00, #ffff00, #ff0000);
-    transition: width 0.2s ease;
-}
-
 /* Media queries for responsive design */
 @media screen and (max-width: 768px) {
     .scene-info h2 {
