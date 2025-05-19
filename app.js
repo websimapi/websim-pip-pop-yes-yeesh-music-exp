@@ -9,244 +9,272 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 class MusicExperience {
     constructor() {
         this.clock = new THREE.Clock();
-        // Initial state for audio loading
-        this.audioLoaded = false;
-        this.soundEffectsLoaded = false;
-        this.audioContext = null;
-        this.analyser = null;
-        this.dataArray = null;
-        this.insideSource = null;
-        this.outsideSource = null;
-        this.insideGain = null;
-        this.outsideGain = null;
-        this.crowdSound = null;
-        this.soundEffects = {};
+        this.audioInitialized = false;
+        this.loadingScreen = document.getElementById('loading-screen');
+        this.loadingProgress = document.querySelector('.loading-progress');
+        this.loadingMessage = document.querySelector('.loading-message');
+        
+        // Setup event for starting the experience
+        this.setupStartButton();
+    }
 
-        this.init();
+    setupStartButton() {
+        // Add start button to loading screen
+        const startButton = document.createElement('button');
+        startButton.id = 'start-experience';
+        startButton.innerHTML = '<i class="fas fa-play"></i> Start Experience';
+        startButton.style.padding = '15px 30px';
+        startButton.style.fontSize = '18px';
+        startButton.style.background = 'linear-gradient(45deg, #ff00cc, #3333ff)';
+        startButton.style.border = 'none';
+        startButton.style.color = 'white';
+        startButton.style.borderRadius = '30px';
+        startButton.style.cursor = 'pointer';
+        startButton.style.textTransform = 'uppercase';
+        startButton.style.fontWeight = 'bold';
+        startButton.style.boxShadow = '0 0 20px rgba(255, 0, 204, 0.7)';
+        startButton.style.transition = 'all 0.3s ease';
+        startButton.style.marginTop = '20px';
+        startButton.style.display = 'none'; // Initially hidden
+        
+        startButton.onmouseover = () => {
+            startButton.style.transform = 'scale(1.05)';
+            startButton.style.boxShadow = '0 0 30px rgba(255, 0, 204, 0.9)';
+        };
+        
+        startButton.onmouseout = () => {
+            startButton.style.transform = 'scale(1)';
+            startButton.style.boxShadow = '0 0 20px rgba(255, 0, 204, 0.7)';
+        };
+        
+        const loadingContent = document.querySelector('.loading-content');
+        loadingContent.appendChild(startButton);
+        
+        // Show start button after initial loading
+        setTimeout(() => {
+            this.loadingProgress.style.width = '100%';
+            this.loadingMessage.textContent = 'Ready! Click Start to begin';
+            startButton.style.display = 'inline-block';
+        }, 2000);
+        
+        // Initialize experience after user interaction
+        startButton.addEventListener('click', () => {
+            this.init();
+            startButton.style.display = 'none';
+            this.loadingMessage.textContent = 'Loading audio and visuals...';
+            this.loadingProgress.style.width = '0%';
+            this.progress = 0;
+            
+            // Restart loading animation
+            this.loadingInterval = setInterval(() => {
+                this.progress += 2;
+                if (this.progress > 95) clearInterval(this.loadingInterval);
+                this.loadingProgress.style.width = `${this.progress}%`;
+            }, 100);
+        });
     }
 
     async init() {
-        this.setupLoading();
-        
-        // Load audio and 3D setup concurrently if possible, or sequentially
-        // Let's make audio setup awaited for a more reliable start
-        await this.setupAudio();
-        this.setupThreeJS();
-        this.setupLights();
-        this.setupPostProcessing();
-        this.createClubScene();
-        this.setupEventListeners();
-        
-        this.finishLoading();
-        this.animate();
+        try {
+            await this.setupAudio();
+            this.setupThreeJS();
+            this.setupLights();
+            this.setupPostProcessing();
+            this.createClubScene();
+            this.setupEventListeners();
+            this.animate();
+            this.finishLoading();
+        } catch (error) {
+            console.error("Error during initialization:", error);
+            this.showErrorMessage("There was a problem loading the experience. Please try refreshing or use a different browser.");
+        }
+    }
+
+    showErrorMessage(message) {
+        clearInterval(this.loadingInterval);
+        this.loadingProgress.style.backgroundColor = 'red';
+        this.loadingProgress.style.width = '100%';
+        this.loadingMessage.textContent = message;
+        this.loadingMessage.style.color = 'red';
     }
 
     setupLoading() {
-        this.loadingScreen = document.getElementById('loading-screen');
-        this.loadingProgress = document.querySelector('.loading-progress');
-        this.loadingMessage = document.querySelector('.loading-message'); // Get the message element
         this.progress = 0;
 
-        // Simulate loading progress based on estimated steps
-        const totalSteps = 100; // Max progress
-        let currentStep = 0;
-
-        const updateProgress = (message, stepIncrement = 0) => {
-            currentStep += stepIncrement;
-            this.progress = Math.min(100, (currentStep / totalSteps) * 100); // Ensure it doesn't exceed 100
+        // Simulate loading progress
+        this.loadingInterval = setInterval(() => {
+            this.progress += 2;
+            if (this.progress > 95) clearInterval(this.loadingInterval);
             this.loadingProgress.style.width = `${this.progress}%`;
-            this.loadingMessage.textContent = message;
-        };
-
-        // Simulate different loading steps
-        updateProgress("Starting...", 0); // Initial message
-        this.loadingProgressUpdater = setInterval(() => {
-             // Keep progress moving slowly during async operations
-             if (this.progress < 90) { // Only auto-increment up to 90%
-                currentStep++;
-                this.progress = Math.min(90, (currentStep / totalSteps) * 100);
-                this.loadingProgress.style.width = `${this.progress}%`;
-             }
-        }, 50); // Update every 50ms, just to show activity
-
-        // Replace specific intervals with calls to updateProgress
-        this.updateProgress = updateProgress; // Make it accessible
+        }, 100);
     }
 
     finishLoading() {
-        clearInterval(this.loadingProgressUpdater);
-        this.progress = 100;
+        clearInterval(this.loadingInterval);
         this.loadingProgress.style.width = '100%';
-        this.loadingMessage.textContent = "Ready!"; // Final message
 
         setTimeout(() => {
             this.loadingScreen.style.opacity = 0;
             setTimeout(() => {
                 this.loadingScreen.style.display = 'none';
-                // Start audio only after the loading screen is hidden and user interaction is possible
-                if (this.audioLoaded) {
-                     this.startAudioSources();
-                } else {
-                     console.warn("Audio did not load successfully. Starting experience without sound.");
-                }
             }, 1000);
         }, 500);
     }
 
     async setupAudio() {
-        this.updateProgress("Loading audio context...", 5);
         try {
-            // Create an audio context
+            // Create audio context
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
             this.listener = this.audioContext.listener;
+            
+            // Resume audio context if suspended (browsers require user interaction)
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+            }
 
-            // Set up audio analyzer for visualizing the music
+            // Set up audio analyzer
             this.analyser = this.audioContext.createAnalyser();
             this.analyser.fftSize = 256;
             this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
-
-            this.updateProgress("Fetching music track...", 10);
-            // Load the main music file
-            const audioResponse = await fetch('/api - Pip Pop Yes Yeesh Extended 2 - Sonauto.ogg');
-            if (!audioResponse.ok) {
-                throw new Error(`HTTP error fetching music track: status ${audioResponse.status}`);
-            }
-            const audioBuffer = await audioResponse.arrayBuffer();
-
-            this.updateProgress("Decoding music track...", 20);
-            // Decode audio data
-            const decodedAudio = await this.audioContext.decodeAudioData(audioBuffer);
-
-            this.updateProgress("Setting up audio nodes...", 10);
-            // Create audio source for inside club (loud)
-            this.insideSource = this.audioContext.createBufferSource();
-            this.insideSource.buffer = decodedAudio;
-            this.insideSource.loop = true;
-
-            // Volume control for inside
-            this.insideGain = this.audioContext.createGain();
-            this.insideGain.gain.value = 0; // Start muted for outside
-
-            // Connect inside audio chain
-            this.insideSource.connect(this.insideGain);
-            this.insideGain.connect(this.analyser);
-            this.analyser.connect(this.audioContext.destination);
-
-            // Create audio source for outside club (muffled)
-            this.outsideSource = this.audioContext.createBufferSource();
-            this.outsideSource.buffer = decodedAudio;
-            this.outsideSource.loop = true;
-
-            // Effects for outside sound (muffled)
-            this.outsideLowpass = this.audioContext.createBiquadFilter();
-            this.outsideLowpass.type = 'lowpass';
-            this.outsideLowpass.frequency.value = 300;
-
-            // Volume control for outside
-            this.outsideGain = this.audioContext.createGain();
-            this.outsideGain.gain.value = 0.3; // Start with outside volume
-
-            // Connect outside audio chain
-            this.outsideSource.connect(this.outsideLowpass);
-            this.outsideLowpass.connect(this.outsideGain);
-            this.outsideGain.connect(this.audioContext.destination);
-
+            
+            // Try to load main music file
+            await this.loadMainAudio();
+            
             // Load sound effects
-            this.updateProgress("Loading sound effects...", 10);
+            this.soundEffects = {};
             await Promise.all([
                 this.loadSoundEffect('doorOpen', './door-open.wav'),
                 this.loadSoundEffect('crowdChatter', './crowd-chatter.wav'),
                 this.loadSoundEffect('bassDrop', './bass-drop.wav')
             ]);
-            this.soundEffectsLoaded = true;
-            this.updateProgress("Sound effects loaded.", 5);
 
+            // Play crowd chatter
+            this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.4);
 
-            // Audio state
-            this.audioLoaded = true; // Mark main audio as loaded successfully
-            this.isPlaying = false; // Audio will start after loading screen
-
+            // Initial state - outside the club
+            this.isPlaying = true;
+            this.isInside = false;
+            this.audioInitialized = true;
+            
         } catch (error) {
-            console.error("Error loading or decoding audio:", error);
-            // Update loading message with error
-            this.loadingMessage.textContent = `Error loading audio: ${error.message || error}`;
-            this.loadingMessage.style.color = 'red';
-            this.loadingProgress.style.backgroundColor = 'red';
-            this.progress = 100; // Ensure loading bar is full red
-            this.loadingProgress.style.width = '100%';
-
-            // Clear the progress updater as loading failed
-            clearInterval(this.loadingProgressUpdater);
-
-            // Set audio state to not playing and not loaded
-            this.audioLoaded = false;
-            this.isPlaying = false;
-
-             // Delay hiding the screen so user can read error message
-             setTimeout(() => {
-                this.loadingScreen.style.opacity = 0;
-                setTimeout(() => {
-                    this.loadingScreen.style.display = 'none';
-                }, 1000);
-            }, 3000); // Keep error message visible for a few seconds
-
-             // Resolve the promise so init() continues, but with audio disabled
-             // Return here to skip starting sources if audio failed
-             return;
+            console.error("Audio setup error:", error);
+            throw new Error("Unable to setup audio: " + error.message);
         }
-         this.updateProgress("Audio loaded.", 5);
     }
-
-    // Method to start audio sources after user interaction
-    startAudioSources() {
-        if (!this.audioLoaded || this.isPlaying) return;
-
+    
+    async loadMainAudio() {
         try {
-             this.audioContext.resume(); // Ensure context is running, especially after user interaction
-             this.insideSource.start(0);
-             this.outsideSource.start(0);
-
-             // Play crowd chatter sound in a loop
-             if (this.soundEffectsLoaded && this.soundEffects['crowdChatter']) {
-                 this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.4);
-             } else {
-                 console.warn("Crowd chatter sound effect not available.");
-             }
-
-
-             this.isPlaying = true;
-             console.log("Audio sources started.");
+            // First try to load OGG format
+            const audioPath = '/api - Pip Pop Yes Yeesh Extended 2 - Sonauto.ogg';
+            this.loadingMessage.textContent = "Loading audio track...";
+            
+            const response = await fetch(audioPath);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const buffer = await response.arrayBuffer();
+            const audioFile = await this.decodeAudioData(buffer);
+            
+            // Create and set up audio sources
+            this.setupAudioSources(audioFile);
+            
         } catch (error) {
-            console.error("Error starting audio sources:", error);
-            this.isPlaying = false; // Failed to start
-             // Potentially update UI to indicate audio failure
+            console.error("Error loading main audio:", error);
+            this.loadingMessage.textContent = "Audio load error. Trying alternative format...";
+            
+            // Create silent audio as fallback so the rest of the experience works
+            const silentBuffer = this.createSilentAudioBuffer(30); // 30 seconds
+            this.setupAudioSources(silentBuffer);
+            
+            // Still throw error for higher level handling
+            throw new Error("Failed to load audio: " + error.message);
         }
+    }
+    
+    // Wrapper for decodeAudioData with proper promise handling
+    decodeAudioData(buffer) {
+        return new Promise((resolve, reject) => {
+            this.audioContext.decodeAudioData(
+                buffer,
+                (decodedData) => resolve(decodedData),
+                (err) => reject(new Error(`Audio decoding error: ${err}`))
+            );
+        });
+    }
+    
+    // Create a silent audio buffer as fallback
+    createSilentAudioBuffer(durationSec) {
+        const sampleRate = this.audioContext.sampleRate;
+        const buffer = this.audioContext.createBuffer(
+            2, // stereo
+            durationSec * sampleRate,
+            sampleRate
+        );
+        return buffer;
+    }
+    
+    setupAudioSources(audioBuffer) {
+        // Create audio source for inside club (loud)
+        this.insideSource = this.audioContext.createBufferSource();
+        this.insideSource.buffer = audioBuffer;
+        this.insideSource.loop = true;
+
+        // Volume control for inside
+        this.insideGain = this.audioContext.createGain();
+        this.insideGain.gain.value = 0;
+
+        // Connect inside audio chain
+        this.insideSource.connect(this.insideGain);
+        this.insideGain.connect(this.analyser);
+        this.analyser.connect(this.audioContext.destination);
+
+        // Create audio source for outside club (muffled)
+        this.outsideSource = this.audioContext.createBufferSource();
+        this.outsideSource.buffer = audioBuffer;
+        this.outsideSource.loop = true;
+
+        // Effects for outside sound (muffled)
+        this.outsideLowpass = this.audioContext.createBiquadFilter();
+        this.outsideLowpass.type = 'lowpass';
+        this.outsideLowpass.frequency.value = 300;
+
+        // Volume control for outside
+        this.outsideGain = this.audioContext.createGain();
+        this.outsideGain.gain.value = 0.3;
+
+        // Connect outside audio chain
+        this.outsideSource.connect(this.outsideLowpass);
+        this.outsideLowpass.connect(this.outsideGain);
+        this.outsideGain.connect(this.audioContext.destination);
+
+        // Start audio sources
+        this.insideSource.start(0);
+        this.outsideSource.start(0);
     }
 
     async loadSoundEffect(name, url) {
-        this.updateProgress(`Loading sound effect: ${name}...`, 1); // Increment progress slightly for each SFX
         try {
             const response = await fetch(url);
-             if (!response.ok) {
+            if (!response.ok) {
                 throw new Error(`HTTP error fetching sound effect ${url}: status ${response.status}`);
             }
             const arrayBuffer = await response.arrayBuffer();
-            const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+            const audioBuffer = await this.decodeAudioData(arrayBuffer);
             this.soundEffects[name] = audioBuffer;
-            this.updateProgress(`Sound effect loaded: ${name}`, 1); // Increment again on success
             return audioBuffer;
         } catch (error) {
-            console.error(`Error loading or decoding sound effect ${url}:`, error);
-            // Decide how to handle sound effect loading errors - log and continue is current behavior
-            this.updateProgress(`Failed to load sound effect: ${name}`); // Just update message, don't increment step on failure
+            console.error(`Error loading sound effect ${url}:`, error);
+            // Create a silent buffer as fallback
+            this.soundEffects[name] = this.createSilentAudioBuffer(2);
             return null;
         }
     }
 
     playSoundEffect(name, loop = false, volume = 1.0) {
         if (!this.audioContext || !this.soundEffects[name]) {
-            console.warn(`Cannot play sound effect "${name}". Audio context not available or sound not loaded.`);
-            return;
+            console.warn(`Sound effect "${name}" not available.`);
+            return null;
         }
 
         try {
@@ -270,7 +298,6 @@ class MusicExperience {
     }
 
     setupThreeJS() {
-         this.updateProgress("Setting up 3D scene...", 10);
         // Create scene
         this.scene = new THREE.Scene();
         this.scene.fog = new THREE.FogExp2(0x000000, 0.01);
@@ -283,8 +310,7 @@ class MusicExperience {
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(window.devicePixelRatio);
-        // Use LinearEncoding for output matching common monitor gamma, sRGBEncoding is more accurate but requires proper setup throughout
-        this.renderer.outputEncoding = THREE.LinearEncoding; // Changed from sRGBEncoding
+        this.renderer.outputEncoding = THREE.sRGBEncoding;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.5;
         this.renderer.shadowMap.enabled = true;
@@ -305,15 +331,11 @@ class MusicExperience {
             this.camera.aspect = window.innerWidth / window.innerHeight;
             this.camera.updateProjectionMatrix();
             this.renderer.setSize(window.innerWidth, window.innerHeight);
-            if (this.composer) { // Check if composer exists
-                this.composer.setSize(window.innerWidth, window.innerHeight);
-            }
+            this.composer.setSize(window.innerWidth, window.innerHeight);
         });
-         this.updateProgress("3D scene setup complete.", 5);
     }
 
     setupLights() {
-         this.updateProgress("Setting up lights...", 5);
         // Ambient light
         const ambientLight = new THREE.AmbientLight(0x222222);
         this.scene.add(ambientLight);
@@ -385,11 +407,9 @@ class MusicExperience {
         // Initially hide club lights
         this.clubLights.visible = false;
         this.scene.add(this.clubLights);
-         this.updateProgress("Lights setup complete.", 5);
     }
 
     setupPostProcessing() {
-         this.updateProgress("Setting up post-processing...", 5);
         // Create composer for post-processing effects
         this.composer = new EffectComposer(this.renderer);
 
@@ -405,11 +425,9 @@ class MusicExperience {
             0.85  // threshold
         );
         this.composer.addPass(this.bloomPass);
-         this.updateProgress("Post-processing setup complete.", 5);
     }
 
     createClubScene() {
-         this.updateProgress("Creating club models...", 10);
         // Create ground
         const groundGeometry = new THREE.PlaneGeometry(100, 100);
         const groundMaterial = new THREE.MeshStandardMaterial({
@@ -655,7 +673,6 @@ class MusicExperience {
         // Hide interior initially
         this.interiorGroup.visible = false;
         this.scene.add(this.interiorGroup);
-         this.updateProgress("Club models created.", 10);
     }
 
     createPeopleInLine() {
@@ -805,6 +822,11 @@ class MusicExperience {
     }
 
     enterClub() {
+        // Ensure audio context is running (for browsers that require user interaction)
+        if (this.audioContext && this.audioContext.state === 'suspended') {
+            this.audioContext.resume().catch(err => console.error("Error resuming audio context:", err));
+        }
+
         // Switch scenes
         document.getElementById('outside-club').classList.remove('active');
         document.getElementById('inside-club').classList.add('active');
@@ -829,8 +851,10 @@ class MusicExperience {
         this.playSoundEffect('doorOpen');
 
         // Fade audio
-        this.fadeAudio(this.outsideGain, 0, 1);
-        this.fadeAudio(this.insideGain, 1, 1);
+        if (this.audioInitialized) {
+            this.fadeAudio(this.outsideGain, 0, 1);
+            this.fadeAudio(this.insideGain, 1, 1);
+        }
 
         // Stop crowd chatter
         if (this.crowdSound && this.crowdSound.source) {
@@ -838,7 +862,11 @@ class MusicExperience {
             this.fadeAudio(this.crowdSound.gainNode, 0, 0.5);
             setTimeout(() => {
                  if (this.crowdSound && this.crowdSound.source) {
-                    this.crowdSound.source.stop();
+                    try {
+                        this.crowdSound.source.stop();
+                    } catch (e) {
+                        console.warn("Error stopping crowd sound:", e);
+                    }
                     this.crowdSound = null; // Clear reference
                  }
             }, 500);
@@ -856,6 +884,11 @@ class MusicExperience {
     }
 
     exitClub() {
+        // Ensure audio context is running
+        if (this.audioContext && this.audioContext.state === 'suspended') {
+            this.audioContext.resume().catch(err => console.error("Error resuming audio context:", err));
+        }
+
         // Switch scenes
         document.getElementById('inside-club').classList.remove('active');
         document.getElementById('outside-club').classList.add('active');
@@ -878,22 +911,34 @@ class MusicExperience {
         // Play door sound
         this.playSoundEffect('doorOpen');
 
-        // Restart crowd chatter
-        this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.4);
+        // Restart crowd chatter if audio is initialized
+        if (this.audioInitialized) {
+            this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.4);
+        }
 
         // Fade audio
-        this.fadeAudio(this.insideGain, 0, 1);
-        this.fadeAudio(this.outsideGain, 0.3, 1);
+        if (this.audioInitialized) {
+            this.fadeAudio(this.insideGain, 0, 1);
+            this.fadeAudio(this.outsideGain, 0.3, 1);
+        }
 
         // Remove dancing class if active
         document.body.classList.remove('dancing');
     }
 
     fadeAudio(gainNode, targetValue, duration) {
+        if (!gainNode || !this.audioContext) return;
+        
         const currentTime = this.audioContext.currentTime;
-        gainNode.gain.cancelScheduledValues(currentTime);
-        gainNode.gain.setValueAtTime(gainNode.gain.value, currentTime);
-        gainNode.gain.linearRampToValueAtTime(targetValue, currentTime + duration);
+        try {
+            gainNode.gain.cancelScheduledValues(currentTime);
+            gainNode.gain.setValueAtTime(gainNode.gain.value, currentTime);
+            gainNode.gain.linearRampToValueAtTime(targetValue, currentTime + duration);
+        } catch (e) {
+            console.warn("Error fading audio:", e);
+            // Fallback to direct value setting
+            gainNode.gain.value = targetValue;
+        }
     }
 
     animate() {
@@ -929,22 +974,43 @@ class MusicExperience {
     }
 
     updateAudioAnalysis() {
+        // Skip if audio not initialized
+        if (!this.audioInitialized) {
+            return {
+                bassScale: 0.3 + Math.sin(this.clock.elapsedTime * 2) * 0.3,
+                lowMidScale: 0.3 + Math.sin(this.clock.elapsedTime * 3) * 0.3,
+                highMidScale: 0.3 + Math.sin(this.clock.elapsedTime * 5) * 0.3,
+                trebleScale: 0.3 + Math.sin(this.clock.elapsedTime * 7) * 0.3
+            };
+        }
+        
         // Get frequency data
-        this.analyser.getByteFrequencyData(this.dataArray);
-        
-        // Calculate average values for different frequency ranges
-        const bass = this.getAverageRange(0, 3);
-        const lowMid = this.getAverageRange(4, 10);
-        const highMid = this.getAverageRange(11, 20);
-        const treble = this.getAverageRange(21, 30);
-        
-        // Scale values
-        const bassScale = bass / 255;
-        const lowMidScale = lowMid / 255;
-        const highMidScale = highMid / 255;
-        const trebleScale = treble / 255;
-        
-        return { bassScale, lowMidScale, highMidScale, trebleScale };
+        try {
+            this.analyser.getByteFrequencyData(this.dataArray);
+            
+            // Calculate average values for different frequency ranges
+            const bass = this.getAverageRange(0, 3);
+            const lowMid = this.getAverageRange(4, 10);
+            const highMid = this.getAverageRange(11, 20);
+            const treble = this.getAverageRange(21, 30);
+            
+            // Scale values
+            const bassScale = bass / 255;
+            const lowMidScale = lowMid / 255;
+            const highMidScale = highMid / 255;
+            const trebleScale = treble / 255;
+            
+            return { bassScale, lowMidScale, highMidScale, trebleScale };
+        } catch (e) {
+            console.warn("Error in audio analysis:", e);
+            // Fallback to simulated values
+            return {
+                bassScale: 0.3 + Math.sin(this.clock.elapsedTime * 2) * 0.3,
+                lowMidScale: 0.3 + Math.sin(this.clock.elapsedTime * 3) * 0.3,
+                highMidScale: 0.3 + Math.sin(this.clock.elapsedTime * 5) * 0.3,
+                trebleScale: 0.3 + Math.sin(this.clock.elapsedTime * 7) * 0.3
+            };
+        }
     }
 
     getAverageRange(start, end) {
