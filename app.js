@@ -14,6 +14,31 @@ class MusicExperience {
         this.loadingProgress = document.querySelector('.loading-progress');
         this.loadingMessage = document.querySelector('.loading-message');
         
+        // Audio raytracing properties
+        this.audioSources = [];
+        this.audioEmitters = [];
+        this.reflectiveSurfaces = [];
+        this.roomAcoustics = {
+            outside: {
+                reflectionLevel: 0.1,
+                reverbTime: 0.1,
+                damping: 0.7,
+                diffusion: 0.3
+            },
+            clubInterior: {
+                reflectionLevel: 0.8,
+                reverbTime: 1.8,
+                damping: 0.2,
+                diffusion: 0.8
+            },
+            hallway: {
+                reflectionLevel: 0.4,
+                reverbTime: 0.6,
+                damping: 0.5,
+                diffusion: 0.5
+            }
+        };
+        
         // Setup event for starting the experience
         this.setupStartButton();
     }
@@ -23,29 +48,7 @@ class MusicExperience {
         const startButton = document.createElement('button');
         startButton.id = 'start-experience';
         startButton.innerHTML = '<i class="fas fa-play"></i> Start Experience';
-        startButton.style.padding = '15px 30px';
-        startButton.style.fontSize = '18px';
-        startButton.style.background = 'linear-gradient(45deg, #ff00cc, #3333ff)';
-        startButton.style.border = 'none';
-        startButton.style.color = 'white';
-        startButton.style.borderRadius = '30px';
-        startButton.style.cursor = 'pointer';
-        startButton.style.textTransform = 'uppercase';
-        startButton.style.fontWeight = 'bold';
-        startButton.style.boxShadow = '0 0 20px rgba(255, 0, 204, 0.7)';
-        startButton.style.transition = 'all 0.3s ease';
-        startButton.style.marginTop = '20px';
         startButton.style.display = 'none'; // Initially hidden
-        
-        startButton.onmouseover = () => {
-            startButton.style.transform = 'scale(1.05)';
-            startButton.style.boxShadow = '0 0 30px rgba(255, 0, 204, 0.9)';
-        };
-        
-        startButton.onmouseout = () => {
-            startButton.style.transform = 'scale(1)';
-            startButton.style.boxShadow = '0 0 20px rgba(255, 0, 204, 0.7)';
-        };
         
         const loadingContent = document.querySelector('.loading-content');
         loadingContent.appendChild(startButton);
@@ -76,11 +79,15 @@ class MusicExperience {
 
     async init() {
         try {
-            await this.setupAudio();
+            // Start with Three.js setup so we have a scene to position audio in
             this.setupThreeJS();
             this.setupLights();
             this.setupPostProcessing();
             this.createClubScene();
+            
+            // Then set up audio with spatial positioning
+            await this.setupRaytracedAudio();
+            
             this.setupEventListeners();
             this.animate();
             this.finishLoading();
@@ -121,36 +128,39 @@ class MusicExperience {
         }, 500);
     }
 
-    async setupAudio() {
+    async setupRaytracedAudio() {
         try {
             // Create audio context
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            this.listener = this.audioContext.listener;
             
             // Resume audio context if suspended (browsers require user interaction)
             if (this.audioContext.state === 'suspended') {
                 await this.audioContext.resume();
             }
 
-            // Set up audio analyzer
+            // Create audio listener (attached to camera)
+            this.audioListener = this.audioContext.listener;
+            
+            // Position the listener based on camera position
+            this.updateAudioListenerPosition();
+            
+            // Create analyzer for visualization
             this.analyser = this.audioContext.createAnalyser();
             this.analyser.fftSize = 256;
             this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
             
-            // Try to load main music file
+            // Set up room acoustics and reverb
+            await this.setupRoomAcoustics();
+            
+            // Load main music with spatial positioning and fallback
             await this.loadMainAudio();
             
-            // Load sound effects
-            this.soundEffects = {};
-            await Promise.all([
-                this.loadSoundEffect('doorOpen', './door-open.wav'),
-                this.loadSoundEffect('crowdChatter', './crowd-chatter.wav'),
-                this.loadSoundEffect('bassDrop', './bass-drop.wav')
-            ]);
-
-            // Play crowd chatter
-            this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.4);
-
+            // Load sound effects with spatial positioning
+            await this.loadSpatialSoundEffects();
+            
+            // Play outdoor ambient sounds
+            this.playOutdoorAmbience();
+            
             // Initial state - outside the club
             this.isPlaying = true;
             this.isInside = false;
@@ -158,15 +168,127 @@ class MusicExperience {
             
         } catch (error) {
             console.error("Audio setup error:", error);
-            throw new Error("Unable to setup audio: " + error.message);
+            // Fall back to basic audio if spatial audio fails
+            await this.setupFallbackAudio();
         }
+    }
+    
+    async setupFallbackAudio() {
+        this.loadingMessage.textContent = "Using simplified audio (spatial audio not supported)";
+        
+        // Basic audio setup without spatial features
+        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 256;
+        this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+        
+        // Load fallback audio
+        const response = await fetch('/audio-fallback.mp3');
+        const buffer = await response.arrayBuffer();
+        const audioBuffer = await this.decodeAudioData(buffer);
+        
+        // Create simple sources
+        this.insideSource = this.audioContext.createBufferSource();
+        this.insideSource.buffer = audioBuffer;
+        this.insideSource.loop = true;
+        
+        this.outsideSource = this.audioContext.createBufferSource();
+        this.outsideSource.buffer = audioBuffer;
+        this.outsideSource.loop = true;
+        
+        // Simple gain and filter
+        this.insideGain = this.audioContext.createGain();
+        this.outsideGain = this.audioContext.createGain();
+        this.outsideLowpass = this.audioContext.createBiquadFilter();
+        this.outsideLowpass.type = 'lowpass';
+        this.outsideLowpass.frequency.value = 300;
+        
+        // Connect nodes
+        this.insideSource.connect(this.insideGain);
+        this.insideGain.connect(this.analyser);
+        this.analyser.connect(this.audioContext.destination);
+        
+        this.outsideSource.connect(this.outsideLowpass);
+        this.outsideLowpass.connect(this.outsideGain);
+        this.outsideGain.connect(this.audioContext.destination);
+        
+        // Set initial volumes
+        this.insideGain.gain.value = 0;
+        this.outsideGain.gain.value = 0.3;
+        
+        // Start audio
+        this.insideSource.start(0);
+        this.outsideSource.start(0);
+        
+        // Load basic sound effects
+        this.soundEffects = {};
+        await Promise.all([
+            this.loadSoundEffect('doorOpen', './door-open.wav'),
+            this.loadSoundEffect('crowdChatter', './crowd-chatter.wav'),
+            this.loadSoundEffect('bassDrop', './bass-drop.wav')
+        ]);
+        
+        // Play crowd sound
+        this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.4);
+        
+        this.audioInitialized = true;
+    }
+    
+    async setupRoomAcoustics() {
+        // Create convolution reverbs for different spaces
+        this.reverbs = {};
+        
+        // Create convolution nodes for each space type
+        for (const [roomType, settings] of Object.entries(this.roomAcoustics)) {
+            const convolver = this.audioContext.createConvolver();
+            // Generate impulse response for this room type
+            convolver.buffer = await this.generateRoomImpulse(settings);
+            this.reverbs[roomType] = convolver;
+        }
+        
+        // Create dry/wet mix for adjustable reverb amount
+        this.reverbMix = this.audioContext.createGain();
+        this.directMix = this.audioContext.createGain();
+    }
+    
+    async generateRoomImpulse({ reflectionLevel, reverbTime, damping, diffusion }) {
+        // Create an impulse response that simulates a specific room
+        const sampleRate = this.audioContext.sampleRate;
+        const length = sampleRate * reverbTime;
+        const impulse = this.audioContext.createBuffer(2, length, sampleRate);
+        const impulseL = impulse.getChannelData(0);
+        const impulseR = impulse.getChannelData(1);
+        
+        // Generate early reflections and late reverb
+        for (let i = 0; i < length; i++) {
+            const t = i / sampleRate;
+            // Early reflections (more distinct)
+            if (t < 0.1) {
+                if (i % Math.floor(0.01 * sampleRate) === 0) {
+                    const reflection = reflectionLevel * Math.exp(-t * 5) * (0.95 - Math.random() * 0.1);
+                    impulseL[i] = reflection * (Math.random() * 2 - 1);
+                    impulseR[i] = reflection * (Math.random() * 2 - 1);
+                }
+            } 
+            // Late reverb (more diffuse)
+            else {
+                // Exponential decay
+                const decay = Math.exp(-t * damping);
+                // Increasing diffusion over time
+                const diffuseness = Math.min(1, t * diffusion * 10);
+                impulseL[i] = (Math.random() * 2 - 1) * decay * diffuseness * reflectionLevel;
+                impulseR[i] = (Math.random() * 2 - 1) * decay * diffuseness * reflectionLevel;
+            }
+        }
+        
+        return impulse;
     }
     
     async loadMainAudio() {
         try {
             // First try to load OGG format
             const audioPath = '/api - Pip Pop Yes Yeesh Extended 2 - Sonauto.ogg';
-            this.loadingMessage.textContent = "Loading audio track...";
+            this.loadingMessage.textContent = "Loading spatial audio track...";
             
             const response = await fetch(audioPath);
             if (!response.ok) {
@@ -174,21 +296,28 @@ class MusicExperience {
             }
             
             const buffer = await response.arrayBuffer();
-            const audioFile = await this.decodeAudioData(buffer);
+            const audioBuffer = await this.decodeAudioData(buffer);
             
-            // Create and set up audio sources
-            this.setupAudioSources(audioFile);
+            // Create and set up spatially positioned audio sources
+            this.setupSpatialAudioSources(audioBuffer);
             
         } catch (error) {
             console.error("Error loading main audio:", error);
-            this.loadingMessage.textContent = "Audio load error. Trying alternative format...";
+            this.loadingMessage.textContent = "Audio load error. Trying fallback...";
             
-            // Create silent audio as fallback so the rest of the experience works
-            const silentBuffer = this.createSilentAudioBuffer(30); // 30 seconds
-            this.setupAudioSources(silentBuffer);
-            
-            // Still throw error for higher level handling
-            throw new Error("Failed to load audio: " + error.message);
+            try {
+                // Try fallback MP3
+                const fallbackResponse = await fetch('/audio-fallback.mp3');
+                const fallbackBuffer = await fallbackResponse.arrayBuffer();
+                const fallbackAudio = await this.decodeAudioData(fallbackBuffer);
+                this.setupSpatialAudioSources(fallbackAudio);
+            } catch (fallbackError) {
+                console.error("Fallback audio also failed:", fallbackError);
+                // Create silent audio as last resort fallback
+                const silentBuffer = this.createSilentAudioBuffer(30); // 30 seconds
+                this.setupSpatialAudioSources(silentBuffer);
+                throw new Error("Failed to load audio");
+            }
         }
     }
     
@@ -214,45 +343,214 @@ class MusicExperience {
         return buffer;
     }
     
-    setupAudioSources(audioBuffer) {
-        // Create audio source for inside club (loud)
-        this.insideSource = this.audioContext.createBufferSource();
-        this.insideSource.buffer = audioBuffer;
-        this.insideSource.loop = true;
-
-        // Volume control for inside
-        this.insideGain = this.audioContext.createGain();
-        this.insideGain.gain.value = 0;
-
-        // Connect inside audio chain
-        this.insideSource.connect(this.insideGain);
-        this.insideGain.connect(this.analyser);
-        this.analyser.connect(this.audioContext.destination);
-
-        // Create audio source for outside club (muffled)
-        this.outsideSource = this.audioContext.createBufferSource();
-        this.outsideSource.buffer = audioBuffer;
-        this.outsideSource.loop = true;
-
-        // Effects for outside sound (muffled)
+    setupSpatialAudioSources(audioBuffer) {
+        // Create multiple audio emitters in the club for a more realistic sound field
+        
+        // Main DJ booth speakers (stereo pair)
+        this.djLeftSpeaker = this.createSpatialSource(audioBuffer, new THREE.Vector3(-3, 3, -14));
+        this.djRightSpeaker = this.createSpatialSource(audioBuffer, new THREE.Vector3(3, 3, -14));
+        
+        // Corner/wall speakers for surround effect
+        this.surroundSpeakers = [
+            this.createSpatialSource(audioBuffer, new THREE.Vector3(-8, 6, -5)),
+            this.createSpatialSource(audioBuffer, new THREE.Vector3(8, 6, -5)),
+            this.createSpatialSource(audioBuffer, new THREE.Vector3(-8, 6, -15)),
+            this.createSpatialSource(audioBuffer, new THREE.Vector3(8, 6, -15))
+        ];
+        
+        // Outside muffled audio (positioned behind the door for directional effect)
+        this.outsideSource = this.createSpatialSource(audioBuffer, new THREE.Vector3(0, 2, -2));
+        
+        // Connect outside source through heavy filtering for the muffled effect
+        this.outsideSource.source.disconnect();
         this.outsideLowpass = this.audioContext.createBiquadFilter();
         this.outsideLowpass.type = 'lowpass';
         this.outsideLowpass.frequency.value = 300;
-
-        // Volume control for outside
+        
+        this.outsideHighCut = this.audioContext.createBiquadFilter();
+        this.outsideHighCut.type = 'lowshelf';
+        this.outsideHighCut.frequency.value = 400;
+        this.outsideHighCut.gain.value = -20;
+        
+        // Add slight reverb for outdoor acoustics
+        this.outsideReverb = this.reverbs.outside;
+        
+        // Outside gain control
         this.outsideGain = this.audioContext.createGain();
-        this.outsideGain.gain.value = 0.3;
-
-        // Connect outside audio chain
-        this.outsideSource.connect(this.outsideLowpass);
-        this.outsideLowpass.connect(this.outsideGain);
+        this.outsideGain.gain.value = 0.5;
+        
+        // Connect the chain for outside audio
+        this.outsideSource.source.connect(this.outsideLowpass);
+        this.outsideLowpass.connect(this.outsideHighCut);
+        this.outsideHighCut.connect(this.outsideReverb);
+        this.outsideReverb.connect(this.outsideGain);
         this.outsideGain.connect(this.audioContext.destination);
-
-        // Start audio sources
-        this.insideSource.start(0);
-        this.outsideSource.start(0);
+        
+        // Connect club speakers to analyser for visualization
+        const clubAnalyserGain = this.audioContext.createGain();
+        this.djLeftSpeaker.gainNode.connect(clubAnalyserGain);
+        this.djRightSpeaker.gainNode.connect(clubAnalyserGain);
+        clubAnalyserGain.connect(this.analyser);
+        
+        // Start all audio sources
+        this.djLeftSpeaker.source.start(0);
+        this.djRightSpeaker.source.start(0);
+        this.outsideSource.source.start(0);
+        this.surroundSpeakers.forEach(speaker => speaker.source.start(0));
+        
+        // Initially inside club audio is silent (we're outside)
+        this.djLeftSpeaker.gainNode.gain.value = 0;
+        this.djRightSpeaker.gainNode.gain.value = 0;
+        this.surroundSpeakers.forEach(speaker => speaker.gainNode.gain.value = 0);
+        
+        // Save the emitters for distance-based volume calculation
+        this.audioEmitters = [
+            {position: new THREE.Vector3(-3, 3, -14), source: this.djLeftSpeaker},
+            {position: new THREE.Vector3(3, 3, -14), source: this.djRightSpeaker},
+            ...this.surroundSpeakers.map((speaker, i) => {
+                const positions = [
+                    new THREE.Vector3(-8, 6, -5),
+                    new THREE.Vector3(8, 6, -5),
+                    new THREE.Vector3(-8, 6, -15),
+                    new THREE.Vector3(8, 6, -15)
+                ];
+                return {position: positions[i], source: speaker};
+            })
+        ];
     }
+    
+    createSpatialSource(buffer, position) {
+        // Create audio source
+        const source = this.audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.loop = true;
+        
+        // Create panner for spatial positioning
+        const panner = this.audioContext.createPanner();
+        panner.panningModel = 'HRTF'; // Use Head Related Transfer Function for binaural audio
+        panner.distanceModel = 'inverse'; // Realistic distance attenuation
+        panner.refDistance = 1;
+        panner.maxDistance = 30;
+        panner.rolloffFactor = 1.5;
+        panner.coneInnerAngle = 360; // Non-directional by default
+        panner.coneOuterAngle = 360;
+        panner.coneOuterGain = 0;
+        
+        // Set initial position
+        panner.positionX.value = position.x;
+        panner.positionY.value = position.y;
+        panner.positionZ.value = position.z;
+        
+        // Create gain node for volume control
+        const gainNode = this.audioContext.createGain();
+        gainNode.gain.value = 1.0;
+        
+        // Connect the audio nodes
+        source.connect(panner);
+        panner.connect(gainNode);
+        gainNode.connect(this.audioContext.destination);
+        
+        // Return all nodes for later control
+        return {
+            source,
+            panner,
+            gainNode,
+            position // Store original position
+        };
+    }
+    
+    async loadSpatialSoundEffects() {
+        // Load sound effects with spatial positioning capabilities
+        this.soundEffects = {};
+        
+        try {
+            // Load all sound effect files
+            const effectFiles = [
+                {name: 'doorOpen', url: './door-open.wav', position: new THREE.Vector3(0, 2, 1)},
+                {name: 'crowdChatter', url: './crowd-chatter.wav', position: new THREE.Vector3(-3, 1, 5)},
+                {name: 'bassDrop', url: './bass-drop.wav', position: new THREE.Vector3(0, 2, -5)}
+            ];
+            
+            // Load each effect
+            await Promise.all(effectFiles.map(async (effect) => {
+                const response = await fetch(effect.url);
+                if (!response.ok) throw new Error(`Failed to load ${effect.url}`);
+                
+                const arrayBuffer = await response.arrayBuffer();
+                const audioBuffer = await this.decodeAudioData(arrayBuffer);
+                
+                // Store both buffer and position for spatial playback
+                this.soundEffects[effect.name] = {
+                    buffer: audioBuffer,
+                    position: effect.position
+                };
+            }));
+            
+        } catch (error) {
+            console.warn("Error loading spatial sound effects:", error);
+            // Create silent fallbacks
+            this.soundEffects = {
+                doorOpen: {
+                    buffer: this.createSilentAudioBuffer(2),
+                    position: new THREE.Vector3(0, 2, 1)
+                },
+                crowdChatter: {
+                    buffer: this.createSilentAudioBuffer(5),
+                    position: new THREE.Vector3(-3, 1, 5)
+                },
+                bassDrop: {
+                    buffer: this.createSilentAudioBuffer(3),
+                    position: new THREE.Vector3(0, 2, -5)
+                }
+            };
+        }
+    }
+    
+    playSpatialSoundEffect(name, loop = false, volume = 1.0) {
+        if (!this.audioContext || !this.soundEffects[name]) {
+            console.warn(`Sound effect "${name}" not available.`);
+            return null;
+        }
 
+        try {
+            const effect = this.soundEffects[name];
+            const source = this.audioContext.createBufferSource();
+            source.buffer = effect.buffer;
+            source.loop = loop;
+
+            // Create spatial panner
+            const panner = this.audioContext.createPanner();
+            panner.panningModel = 'HRTF';
+            panner.distanceModel = 'inverse';
+            panner.refDistance = 1;
+            panner.maxDistance = 30;
+            panner.rolloffFactor = 1.5;
+            
+            // Set position
+            panner.positionX.value = effect.position.x;
+            panner.positionY.value = effect.position.y;
+            panner.positionZ.value = effect.position.z;
+
+            // Create gain for volume control
+            const gainNode = this.audioContext.createGain();
+            gainNode.gain.value = volume;
+
+            // Connect nodes
+            source.connect(panner);
+            panner.connect(gainNode);
+            gainNode.connect(this.audioContext.destination);
+
+            // Start playback
+            source.start(0);
+
+            return { source, panner, gainNode };
+            
+        } catch (error) {
+            console.error(`Error playing spatial sound effect "${name}":`, error);
+            return null;
+        }
+    }
+    
     async loadSoundEffect(name, url) {
         try {
             const response = await fetch(url);
@@ -295,6 +593,103 @@ class MusicExperience {
             console.error(`Error playing sound effect "${name}":`, error);
             return null;
         }
+    }
+    
+    playOutdoorAmbience() {
+        // Play ambient crowd sound outside the club
+        if (this.audioInitialized) {
+            // Check if we're using spatial audio
+            if (this.playSpatialSoundEffect) {
+                this.crowdSound = this.playSpatialSoundEffect('crowdChatter', true, 0.6);
+            } else {
+                this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.4);
+            }
+        }
+    }
+    
+    updateAudioListenerPosition() {
+        if (!this.audioContext || !this.camera) return;
+        
+        // Get camera position and orientation
+        const cameraPosition = this.camera.position;
+        const cameraDirection = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+        const cameraUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion);
+        
+        // Update audio listener position (follows camera)
+        if (this.audioListener) {
+            // Web Audio API listener position
+            this.audioListener.positionX.value = cameraPosition.x;
+            this.audioListener.positionY.value = cameraPosition.y;
+            this.audioListener.positionZ.value = cameraPosition.z;
+            
+            // Web Audio API listener orientation
+            this.audioListener.forwardX.value = cameraDirection.x;
+            this.audioListener.forwardY.value = cameraDirection.y;
+            this.audioListener.forwardZ.value = cameraDirection.z;
+            this.audioListener.upX.value = cameraUp.x;
+            this.audioListener.upY.value = cameraUp.y;
+            this.audioListener.upZ.value = cameraUp.z;
+        }
+    }
+    
+    updateAudioOcclusion() {
+        if (!this.isInside || !this.audioInitialized || !this.audioEmitters) return;
+        
+        // Cast rays from each audio source to the listener to check for occlusion
+        const listenerPosition = new THREE.Vector3(
+            this.camera.position.x,
+            this.camera.position.y,
+            this.camera.position.z
+        );
+        
+        // Raycaster for checking occlusion
+        const raycaster = new THREE.Raycaster();
+        
+        // Check each audio emitter
+        this.audioEmitters.forEach(emitter => {
+            // Direction from source to listener
+            const direction = new THREE.Vector3().subVectors(listenerPosition, emitter.position).normalize();
+            
+            // Set up raycaster
+            raycaster.set(emitter.position, direction);
+            
+            // Get distance
+            const distance = emitter.position.distanceTo(listenerPosition);
+            
+            // Check for intersections with objects in the scene
+            const intersects = raycaster.intersectObjects(this.reflectiveSurfaces, true);
+            
+            // Calculate occlusion factor based on objects between source and listener
+            let occlusionFactor = 1.0; // 1.0 = no occlusion
+            
+            if (intersects.length > 0) {
+                // Some object is between source and listener
+                // Reduce volume more for each object in the path
+                occlusionFactor = Math.max(0.3, 1.0 - (intersects.length * 0.2));
+                
+                // Apply low-pass filter for occlusion effect if we have a filter
+                if (emitter.source.filter) {
+                    // Reduce high frequencies when occluded
+                    emitter.source.filter.frequency.value = 500 + (10000 * occlusionFactor);
+                }
+            } else if (emitter.source.filter) {
+                // No occlusion, full frequency range
+                emitter.source.filter.frequency.value = 20000;
+            }
+            
+            // Distance-based attenuation (in addition to the Web Audio API's built-in models)
+            const distanceFactor = 1.0 / (1.0 + distance * 0.1);
+            
+            // Apply combined factors to volume
+            const targetVolume = distanceFactor * occlusionFactor * (this.isInside ? 1.0 : 0.0);
+            
+            // Smoothly adjust volume to target (to avoid clicks/pops)
+            if (emitter.source.gainNode) {
+                const currentVolume = emitter.source.gainNode.gain.value;
+                const newVolume = currentVolume + (targetVolume - currentVolume) * 0.1;
+                emitter.source.gainNode.gain.value = newVolume;
+            }
+        });
     }
 
     setupThreeJS() {
@@ -673,6 +1068,24 @@ class MusicExperience {
         // Hide interior initially
         this.interiorGroup.visible = false;
         this.scene.add(this.interiorGroup);
+        
+        // After creating scene objects, collect reflective surfaces for audio raytracing
+        this.collectReflectiveSurfaces();
+    }
+    
+    collectReflectiveSurfaces() {
+        // Collect all surfaces that should reflect sound
+        this.reflectiveSurfaces = [];
+        
+        // Add walls, floors, ceilings, etc. to the reflective surfaces list
+        this.scene.traverse(object => {
+            if (object.isMesh) {
+                // Add all substantial meshes as potential sound reflectors
+                // In a more advanced implementation, you would tag meshes with 
+                // specific acoustic properties
+                this.reflectiveSurfaces.push(object);
+            }
+        });
     }
 
     createPeopleInLine() {
@@ -766,7 +1179,11 @@ class MusicExperience {
             document.body.classList.toggle('dancing');
             // Play bass drop when starting to dance
             if (document.body.classList.contains('dancing')) {
-                this.playSoundEffect('bassDrop');
+                if (this.playSpatialSoundEffect) {
+                    this.playSpatialSoundEffect('bassDrop');
+                } else {
+                    this.playSoundEffect('bassDrop');
+                }
             }
         });
 
@@ -846,35 +1263,66 @@ class MusicExperience {
 
         // Reset camera position for inside view
         this.camera.position.set(0, 3, 5);
+        this.updateAudioListenerPosition();
 
-        // Play door open sound
-        this.playSoundEffect('doorOpen');
+        // Play door open sound (spatial if available)
+        if (this.playSpatialSoundEffect) {
+            this.playSpatialSoundEffect('doorOpen');
+        } else {
+            this.playSoundEffect('doorOpen');
+        }
 
-        // Fade audio
-        if (this.audioInitialized) {
+        // Apply entrance acoustic transition
+        this.transitionRoomAcoustics('outside', 'clubInterior', 1.5);
+
+        // For spatial audio
+        if (this.djLeftSpeaker && this.djRightSpeaker) {
+            // Fade in the club speakers
+            this.fadeAudioNode(this.djLeftSpeaker.gainNode.gain, 1.0, 1.0);
+            this.fadeAudioNode(this.djRightSpeaker.gainNode.gain, 1.0, 1.0);
+            
+            // Fade in surround speakers
+            this.surroundSpeakers.forEach(speaker => {
+                this.fadeAudioNode(speaker.gainNode.gain, 0.6, 1.5);
+            });
+            
+            // Fade out the outside source
+            this.fadeAudioNode(this.outsideGain.gain, 0, 1.0);
+        } 
+        // For fallback audio
+        else if (this.insideGain && this.outsideGain) {
             this.fadeAudio(this.outsideGain, 0, 1);
             this.fadeAudio(this.insideGain, 1, 1);
         }
 
         // Stop crowd chatter
-        if (this.crowdSound && this.crowdSound.source) {
+        if (this.crowdSound && this.crowdSound.gainNode) {
             // Add a fade out before stopping for smoother transition
-            this.fadeAudio(this.crowdSound.gainNode, 0, 0.5);
+            if (this.crowdSound.gainNode) {
+                this.fadeAudioNode(this.crowdSound.gainNode.gain, 0, 0.5);
+            } else if (this.crowdSound.source) {
+                this.fadeAudio(this.crowdSound.gainNode, 0, 0.5);
+            }
+            
             setTimeout(() => {
-                 if (this.crowdSound && this.crowdSound.source) {
+                if (this.crowdSound && this.crowdSound.source) {
                     try {
                         this.crowdSound.source.stop();
                     } catch (e) {
                         console.warn("Error stopping crowd sound:", e);
                     }
                     this.crowdSound = null; // Clear reference
-                 }
+                }
             }, 500);
         }
 
         // After door open sound, play bass drop
         setTimeout(() => {
-            this.playSoundEffect('bassDrop');
+            if (this.playSpatialSoundEffect) {
+                this.playSpatialSoundEffect('bassDrop');
+            } else {
+                this.playSoundEffect('bassDrop');
+            }
         }, 1000);
 
         // Show instructions if first time
@@ -907,23 +1355,97 @@ class MusicExperience {
 
         // Reset camera position for outside view
         this.camera.position.set(0, 2, 10);
+        this.updateAudioListenerPosition();
 
-        // Play door sound
-        this.playSoundEffect('doorOpen');
+        // Play door sound (spatial if available)
+        if (this.playSpatialSoundEffect) {
+            this.playSpatialSoundEffect('doorOpen');
+        } else {
+            this.playSoundEffect('doorOpen');
+        }
+
+        // Apply exit acoustic transition
+        this.transitionRoomAcoustics('clubInterior', 'outside', 1.5);
 
         // Restart crowd chatter if audio is initialized
         if (this.audioInitialized) {
-            this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.4);
+            if (this.playSpatialSoundEffect) {
+                this.crowdSound = this.playSpatialSoundEffect('crowdChatter', true, 0.6);
+            } else {
+                this.crowdSound = this.playSoundEffect('crowdChatter', true, 0.4);
+            }
         }
 
-        // Fade audio
-        if (this.audioInitialized) {
+        // For spatial audio
+        if (this.djLeftSpeaker && this.djRightSpeaker) {
+            // Fade out the club speakers
+            this.fadeAudioNode(this.djLeftSpeaker.gainNode.gain, 0, 1.0);
+            this.fadeAudioNode(this.djRightSpeaker.gainNode.gain, 0, 1.0);
+            
+            // Fade out surround speakers
+            this.surroundSpeakers.forEach(speaker => {
+                this.fadeAudioNode(speaker.gainNode.gain, 0, 1.0);
+            });
+            
+            // Fade in the outside source
+            this.fadeAudioNode(this.outsideGain.gain, 0.5, 1.5);
+        } 
+        // For fallback audio
+        else if (this.insideGain && this.outsideGain) {
             this.fadeAudio(this.insideGain, 0, 1);
             this.fadeAudio(this.outsideGain, 0.3, 1);
         }
 
         // Remove dancing class if active
         document.body.classList.remove('dancing');
+    }
+    
+    transitionRoomAcoustics(fromRoom, toRoom, duration) {
+        if (!this.reverbs || !this.reverbs[fromRoom] || !this.reverbs[toRoom]) return;
+        
+        // Create temporary crossfade nodes if needed
+        if (!this.reverbMixA) {
+            this.reverbMixA = this.audioContext.createGain();
+            this.reverbMixA.gain.value = 1.0;
+        }
+        
+        if (!this.reverbMixB) {
+            this.reverbMixB = this.audioContext.createGain();
+            this.reverbMixB.gain.value = 0.0;
+        }
+        
+        // Connect current and target reverb nodes
+        this.reverbs[fromRoom].connect(this.reverbMixA);
+        this.reverbs[toRoom].connect(this.reverbMixB);
+        
+        // Connect both to the output
+        this.reverbMixA.connect(this.audioContext.destination);
+        this.reverbMixB.connect(this.audioContext.destination);
+        
+        // Fade between them
+        const currentTime = this.audioContext.currentTime;
+        this.reverbMixA.gain.linearRampToValueAtTime(0, currentTime + duration);
+        this.reverbMixB.gain.linearRampToValueAtTime(1, currentTime + duration);
+        
+        // Cleanup after transition
+        setTimeout(() => {
+            this.reverbs[fromRoom].disconnect(this.reverbMixA);
+            this.reverbMixA.disconnect();
+        }, duration * 1000);
+    }
+
+    fadeAudioNode(audioParam, targetValue, duration) {
+        if (!audioParam || !this.audioContext) return;
+        
+        const currentTime = this.audioContext.currentTime;
+        try {
+            audioParam.cancelScheduledValues(currentTime);
+            audioParam.setValueAtTime(audioParam.value, currentTime);
+            audioParam.linearRampToValueAtTime(targetValue, currentTime + duration);
+        } catch (e) {
+            console.warn("Error fading audio parameter:", e);
+            audioParam.value = targetValue; // Fallback
+        }
     }
 
     fadeAudio(gainNode, targetValue, duration) {
@@ -949,6 +1471,12 @@ class MusicExperience {
         if (this.controls.enabled) {
             this.controls.update();
         }
+        
+        // Update audio listener position (follows camera)
+        this.updateAudioListenerPosition();
+        
+        // Update audio occlusion
+        this.updateAudioOcclusion();
         
         // Skip updates if audio isn't playing
         if (!this.isPlaying) {
